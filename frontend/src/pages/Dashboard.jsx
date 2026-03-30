@@ -51,7 +51,7 @@ function Dashboard() {
 
   const fetchFriends = async () => {
     try {
-      const res = await fetch(`https://securechat-u1nk.onrender.com/api/users/friends/${user.id}`);
+      const res = await fetch(`https://securechat-flwx.onrender.com/api/users/friends/${user.id}`);
       const data = await res.json();
       setFriends(data.friends || []);
       setActiveChats(data.activeChats || []);
@@ -65,7 +65,7 @@ function Dashboard() {
 
   const fetchUnreadCounts = async () => {
     try {
-      const res = await fetch(`https://securechat-u1nk.onrender.com/api/messages/unread/${user.id}`);
+      const res = await fetch(`https://securechat-flwx.onrender.com/api/messages/unread/${user.id}`);
       const data = await res.json();
       setUnreadCounts(data || {});
     } catch (err) {}
@@ -76,7 +76,7 @@ function Dashboard() {
     if (!searchQuery.trim()) return;
     try {
       setHasSearched(true);
-      const res = await fetch(`https://securechat-u1nk.onrender.com/api/users/search?q=${searchQuery}&userId=${user.id}`);
+      const res = await fetch(`https://securechat-flwx.onrender.com/api/users/search?q=${searchQuery}&userId=${user.id}`);
       const data = await res.json();
       setSearchResults(data); 
     } catch (err) {}
@@ -84,7 +84,7 @@ function Dashboard() {
 
   const executeAction = async (endpoint, payload) => {
     try {
-      await fetch(`https://securechat-u1nk.onrender.com/api/users/${endpoint}`, {
+      await fetch(`https://securechat-flwx.onrender.com/api/users/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -125,7 +125,7 @@ function Dashboard() {
     if (deleteConfirm.step === 1) return setDeleteConfirm({ friendId, step: 2 });
     if (deleteConfirm.step === 2) {
       try {
-        await fetch(`https://securechat-u1nk.onrender.com/api/messages/history/${user.id}/${friendId}`, { method: 'DELETE' });
+        await fetch(`https://securechat-flwx.onrender.com/api/messages/history/${user.id}/${friendId}`, { method: 'DELETE' });
         setDeleteConfirm({ friendId: null, step: 0 });
         fetchFriends(); 
         fetchUnreadCounts();

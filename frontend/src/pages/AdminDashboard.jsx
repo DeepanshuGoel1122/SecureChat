@@ -26,7 +26,7 @@ function AdminDashboard() {
 
   const fetchTopology = async () => {
     try {
-      const res = await fetch(`https://securechat-u1nk.onrender.com/api/admin/users`);
+      const res = await fetch(`https://securechat-flwx.onrender.com/api/admin/users`);
       const data = await res.json();
       setUsersInfo(data || []);
     } catch (err) {
@@ -49,7 +49,7 @@ function AdminDashboard() {
     setResetError('');
     
     try {
-      const response = await fetch(`https://securechat-u1nk.onrender.com/api/admin/reset-password`, {
+      const response = await fetch(`https://securechat-flwx.onrender.com/api/admin/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -71,7 +71,7 @@ function AdminDashboard() {
 
   const handleToggleDisable = async (targetUser) => {
     try {
-      const response = await fetch(`https://securechat-u1nk.onrender.com/api/admin/toggle-disable`, {
+      const response = await fetch(`https://securechat-flwx.onrender.com/api/admin/toggle-disable`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: targetUser._id, isDisabled: !targetUser.isDisabled })

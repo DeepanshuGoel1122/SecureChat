@@ -18,7 +18,7 @@ function Login() {
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
     
     try {
-      const response = await fetch(`https://securechat-u1nk.onrender.com${endpoint}`, {
+      const response = await fetch(`https://securechat-flwx.onrender.com${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })

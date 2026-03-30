@@ -26,7 +26,7 @@ function ChatRoom() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const res = await fetch(`https://securechat-u1nk.onrender.com/api/users/friends/${user.id}`);
+        const res = await fetch(`https://securechat-flwx.onrender.com/api/users/friends/${user.id}`);
         const data = await res.json();
         
         const isFriend = (data.friends || []).some(f => f._id === friendId);
@@ -39,11 +39,11 @@ function ChatRoom() {
         else if (isSentReq || isRecvReq) setUserState('pending');
         else setUserState('none');
 
-        const userRes = await fetch(`https://securechat-u1nk.onrender.com/api/users/user/${friendId}`);
+        const userRes = await fetch(`https://securechat-flwx.onrender.com/api/users/user/${friendId}`);
         const fallbackUser = await userRes.json();
         setFriendDetails(fallbackUser);
         
-        const histRes = await fetch(`https://securechat-u1nk.onrender.com/api/messages/history/${user.id}/${friendId}`);
+        const histRes = await fetch(`https://securechat-flwx.onrender.com/api/messages/history/${user.id}/${friendId}`);
         const histData = await histRes.json();
         setMessages(histData);
         

@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
   // Handle global socket connection when user logs in
   useEffect(() => {
     if (user?.id) {
-      const newSocket = io('https://securechat-u1nk.onrender.com');
+      const newSocket = io('https://securechat-flwx.onrender.com');
       setSocket(newSocket);
 
       newSocket.emit('user_online', user.id);
