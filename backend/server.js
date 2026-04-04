@@ -127,10 +127,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mark_read', async ({ userId, friendId }) => {
-     await Message.updateMany(
+     const res = await Message.updateMany(
        { sender: friendId, receiver: userId, isRead: false },
        { $set: { isRead: true } }
      );
+     if (res.modifiedCount > 0) {
+       io.to(friendId).emit('messages_read', { byUserId: userId });
+     }
   });
 
   socket.on('disconnect', async () => {

@@ -18,6 +18,7 @@ function ChatRoom() {
   const [editingMessage, setEditingMessage] = useState(null);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isLoadingChat, setIsLoadingChat] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -25,36 +26,47 @@ function ChatRoom() {
 
   useEffect(() => {
     const loadData = async () => {
+      setIsLoadingChat(true);
       try {
+        console.log(`[ChatRoom] Fetching data for friend: ${friendId}`);
         const res = await fetch(`https://securechat-flwx.onrender.com/api/users/friends/${user.id}`);
+        if (!res.ok) throw new Error(`Friends fetch failed: ${res.status}`);
         const data = await res.json();
         
-        const isFriend = (data.friends || []).some(f => f._id === friendId);
-        const isSentReq = (data.sentRequests || []).some(f => f._id === friendId);
-        const isRecvReq = (data.receivedRequests || []).some(f => f._id === friendId);
-        const isBlocked = (data.blockedUsers || []).some(f => f._id === friendId);
+        // Robust ID comparison to handle potential type differences
+        const isFriend = (data.friends || []).some(f => String(f._id) === String(friendId));
+        const isSentReq = (data.sentRequests || []).some(f => String(f._id) === String(friendId));
+        const isRecvReq = (data.receivedRequests || []).some(f => String(f._id) === String(friendId));
+        const isBlocked = (data.blockedUsers || []).some(f => String(f._id) === String(friendId));
         
+        console.log(`[ChatRoom] State Analysis: isFriend=${isFriend}, isSent=${isSentReq}, isRecv=${isRecvReq}, isBlocked=${isBlocked}`);
+
         if (isBlocked) setUserState('blocked');
         else if (isFriend) setUserState('friend');
         else if (isSentReq || isRecvReq) setUserState('pending');
         else setUserState('none');
 
         const userRes = await fetch(`https://securechat-flwx.onrender.com/api/users/user/${friendId}`);
-        const fallbackUser = await userRes.json();
-        setFriendDetails(fallbackUser);
+        if (userRes.ok) {
+          const fallbackUser = await userRes.json();
+          setFriendDetails(fallbackUser);
+        }
         
         const histRes = await fetch(`https://securechat-flwx.onrender.com/api/messages/history/${user.id}/${friendId}`);
-        const histData = await histRes.json();
-        setMessages(histData);
+        if (histRes.ok) {
+          const histData = await histRes.json();
+          setMessages(histData);
+          const myMessages = histData.filter(m => m.sender._id === user.id).length;
+          setSentCount(myMessages);
+        }
         
-        const myMessages = histData.filter(m => m.sender._id === user.id).length;
-        setSentCount(myMessages);
-
         if (socket && isFriend) {
           socket.emit('mark_read', { userId: user.id, friendId });
         }
       } catch (err) {
-        console.error('Error fetching data', err);
+        console.error('[ChatRoom] Error fetching data:', err);
+      } finally {
+        setIsLoadingChat(false);
       }
     };
     
@@ -105,13 +117,21 @@ function ChatRoom() {
       alert(`Server Notice: ${msg}`);
     };
 
+    const handleMessagesRead = ({ byUserId }) => {
+      if (byUserId === friendId) {
+        setMessages((prev) => prev.map(m => m.receiver._id === friendId ? { ...m, isRead: true } : m));
+      }
+    };
+
     socket.on('receive_message', handleReceive);
     socket.on('message_edited', handleEditReceive);
+    socket.on('messages_read', handleMessagesRead);
     socket.on('chat_error', handleError);
     
     return () => {
       socket.off('receive_message', handleReceive);
       socket.off('message_edited', handleEditReceive);
+      socket.off('messages_read', handleMessagesRead);
       socket.off('chat_error', handleError);
     };
   }, [socket, user, friendId, userState]);
@@ -243,7 +263,16 @@ function ChatRoom() {
           onClick={(e) => e.stopPropagation()}
           style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
         >
-          {messages.map((msg, idx) => {
+          {isLoadingChat ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+               <span className="spinner" style={{ borderTopColor: 'var(--accent)', width: '30px', height: '30px', borderWidth: '3px' }}></span>
+               <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Fetching conversation...</div>
+            </div>
+          ) : messages.length === 0 ? (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>
+              No messages yet. Send a message to start chatting!
+            </div>
+          ) : messages.map((msg, idx) => {
             const isSelf = msg.sender._id === user.id;
             const showMenu = activeMenuId === msg._id;
             
@@ -346,6 +375,11 @@ function ChatRoom() {
                 </div>
 
                 <div style={{ lineHeight: '1.4' }}>{msg.text}</div>
+                {isSelf && msg.isRead && (
+                  <div style={{ textAlign: 'right', marginTop: '6px', marginBottom: '-6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: '#ffffff', backgroundColor: '#22c55e', padding: '2px 6px', borderRadius: '8px', fontWeight: 'bold' }}>Seen</span>
+                  </div>
+                )}
               </div>
             );
           })}

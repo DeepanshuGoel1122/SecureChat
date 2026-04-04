@@ -7,6 +7,7 @@ function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   
   const { login } = useContext(AuthContext);
   const navigate = useNavigate();
@@ -14,6 +15,7 @@ function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
     
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
     
@@ -38,6 +40,8 @@ function Login() {
       }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -79,8 +83,9 @@ function Login() {
               onChange={(e) => setPassword(e.target.value)}
               required 
             />
-            <button type="submit" className="btn" style={{ width: '100%', marginTop: '1rem' }}>
-              {isLogin ? 'Login' : 'Register'}
+            <button type="submit" className="btn" style={{ width: '100%', marginTop: '1rem' }} disabled={loading}>
+              {loading && <span className="spinner"></span>}
+              {isLogin ? (loading ? 'Logging in...' : 'Login') : (loading ? 'Registering...' : 'Register')}
             </button>
           </form>
           

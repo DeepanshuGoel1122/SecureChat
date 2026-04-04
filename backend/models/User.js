@@ -21,6 +21,7 @@ const UserSchema = new mongoose.Schema({
   blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   lastOnline: { type: Date, default: Date.now },
   isDisabled: { type: Boolean, default: false },
+  isInactive: { type: Boolean, default: false },
   clearedChats: {
     type: Map,
     of: Date,
