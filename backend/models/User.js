@@ -20,6 +20,16 @@ const UserSchema = new mongoose.Schema({
   receivedRequests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   lastOnline: { type: Date, default: Date.now },
+  autoLogoutEnabled: { type: Boolean, default: true },
+  lastLoginMetadata: {
+    deviceType: String,
+    os: String,
+    browser: String,
+    brand: String,
+    model: String
+  },
+  disabledAt: { type: Date },
+  inactiveAt: { type: Date },
   isDisabled: { type: Boolean, default: false },
   isInactive: { type: Boolean, default: false },
   clearedChats: {

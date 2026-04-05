@@ -55,7 +55,16 @@ router.post('/toggle-disable', async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
     
     user.isDisabled = isDisabled;
+    if (isDisabled) {
+      user.disabledAt = new Date();
+    } else {
+      user.disabledAt = null;
+    }
     await user.save();
+    
+    if (isDisabled) {
+      req.io.to(userId).emit('account_disabled');
+    }
     
     res.json({ message: 'Success' });
   } catch (err) {
@@ -70,6 +79,7 @@ router.post('/reactivate-user', async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.isInactive = false;
+    user.inactiveAt = null;
     await user.save();
     res.json({ message: 'User reactivated successfully' });
   } catch (err) {
@@ -87,6 +97,8 @@ router.post('/permanent-delete', async (req, res) => {
     }
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
+    
+    req.io.to(userId).emit('account_disabled');
     
     // Save username to blacklisted
     await DeletedUsername.create({ username: user.username });

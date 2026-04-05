@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const UAParser = require('ua-parser-js');
 const User = require('../models/User');
 const DeletedUsername = require('../models/DeletedUsername');
 
@@ -33,7 +34,7 @@ router.post('/register', async (req, res) => {
     const payload = { user: { id: user.id, username: user.username, role } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token, user: { id: user.id, username: user.username, role } });
+      res.json({ token, user: { id: user.id, username: user.username, role, autoLogoutEnabled: user.autoLogoutEnabled } });
     });
   } catch (err) {
     console.error('Registration Error:', err.message);
@@ -50,7 +51,7 @@ router.post('/login', async (req, res) => {
     }
     
     if (user.isDisabled) {
-      return res.status(403).json({ message: 'Account disabled. Contact Admin.' });
+      return res.status(403).json({ message: 'Account Disabled Try After Sometime' });
     }
     
     let isMatch = false;
@@ -72,12 +73,29 @@ router.post('/login', async (req, res) => {
     }
     
     user.lastOnline = new Date();
+
+    const ua = req.headers['user-agent'];
+    const parser = new UAParser(ua);
+    const resUA = parser.getResult();
+    
+    user.lastLoginMetadata = {
+      deviceType: resUA.device.type || 'desktop',
+      os: resUA.os.name || 'Unknown OS',
+      browser: resUA.browser.name || 'Unknown Browser',
+      brand: resUA.device.vendor || (resUA.os.name === 'iOS' ? 'Apple' : resUA.os.name) || 'Generic',
+      model: resUA.device.model || (resUA.device.type ? `${resUA.device.type} device` : 'Device')
+    };
+
+    if (user.lastLoginMetadata.deviceType === 'desktop' && user.lastLoginMetadata.brand === 'Generic') {
+      user.lastLoginMetadata.brand = 'Personal Computer';
+    }
+
     await user.save();
     
     const payload = { user: { id: user.id, username: user.username, role: user.role || 'user' } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token, user: { id: user.id, username: user.username, role: user.role || 'user' } });
+      res.json({ token, user: { id: user.id, username: user.username, role: user.role || 'user', autoLogoutEnabled: user.autoLogoutEnabled } });
     });
   } catch (err) {
     console.error('Login Error:', err.message);
@@ -128,6 +146,7 @@ router.post('/soft-delete', async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
     
     user.isInactive = true;
+    user.inactiveAt = new Date();
     await user.save();
     
     res.json({ message: 'Account flagged for deletion' });

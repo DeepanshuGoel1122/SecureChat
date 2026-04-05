@@ -24,6 +24,12 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
+// Attach io to req for access in routes
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/messages', messageRoutes);
@@ -39,11 +45,12 @@ const onlineUsers = new Map(); // Maps socket.id -> userId
 io.on('connection', (socket) => {
   console.log('User connected to socket:', socket.id);
 
-  socket.on('user_online', (userId) => {
+  socket.on('user_online', (data) => {
+    const { userId, deviceType } = typeof data === 'string' ? { userId: data, deviceType: 'desktop' } : data;
     socket.join(userId);
-    onlineUsers.set(socket.id, userId);
+    onlineUsers.set(socket.id, { userId, deviceType });
     
-    const uniqueUsers = Array.from(new Set(onlineUsers.values()));
+    const uniqueUsers = Array.from(onlineUsers.values());
     io.emit('online_users', uniqueUsers);
   });
 
@@ -138,15 +145,15 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', async () => {
     console.log('User disconnected:', socket.id);
-    const userId = onlineUsers.get(socket.id);
-    if (userId) {
+    const userData = onlineUsers.get(socket.id);
+    if (userData) {
       try {
         const User = require('./models/User');
-        await User.findByIdAndUpdate(userId, { lastOnline: new Date() });
+        await User.findByIdAndUpdate(userData.userId, { lastOnline: new Date() });
       } catch(e) {}
     }
     onlineUsers.delete(socket.id);
-    const uniqueUsers = Array.from(new Set(onlineUsers.values()));
+    const uniqueUsers = Array.from(onlineUsers.values());
     io.emit('online_users', uniqueUsers);
   });
 });
