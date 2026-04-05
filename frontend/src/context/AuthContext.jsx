@@ -34,6 +34,9 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [socket, setSocket] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [showDisabledModal, setShowDisabledModal] = useState(false);
+  const [showTimeoutModal, setShowTimeoutModal] = useState(false);
+  const [timeoutMessage, setTimeoutMessage] = useState('');
 
   useEffect(() => {
     if (token) {
@@ -57,23 +60,29 @@ export const AuthProvider = ({ children }) => {
 
     const checkInactivity = () => {
       const lastActive = localStorage.getItem('lastActiveTime');
-      if (lastActive && Date.now() - parseInt(lastActive, 10) > INACTIVITY_LIMIT) {
+      // Only proceed if autoLogoutEnabled is NOT explicitly false
+      if (user?.autoLogoutEnabled !== false && lastActive && Date.now() - parseInt(lastActive, 10) > INACTIVITY_LIMIT) {
+        const minutes = Math.round(INACTIVITY_LIMIT / 60000);
+        const seconds = Math.round(INACTIVITY_LIMIT / 1000);
+        setTimeoutMessage(`Session expired due to ${minutes > 0 ? minutes + ' hours' : seconds + ' seconds'} of inactivity. Please login again for security.`);
+        setShowTimeoutModal(true);
         logout();
-        alert('Session expired due to 3 hours of inactivity. Please login again for security.');
       }
     };
 
     let lastUpdate = Date.now();
     const updateActivity = () => {
       const now = Date.now();
-      if (now - lastUpdate > 5000) { 
+      // Update check: every 2 seconds for short limits, 5 for long ones
+      if (now - lastUpdate > (INACTIVITY_LIMIT < 60000 ? 1000 : 5000)) { 
         localStorage.setItem('lastActiveTime', now.toString());
         lastUpdate = now;
       }
     };
 
     checkInactivity();
-    const interval = setInterval(checkInactivity, 60000); 
+    // Check more frequently for short test limits
+    const interval = setInterval(checkInactivity, INACTIVITY_LIMIT < 60000 ? 2000 : 60000); 
 
     window.addEventListener('mousemove', updateActivity);
     window.addEventListener('keydown', updateActivity);
@@ -95,15 +104,22 @@ export const AuthProvider = ({ children }) => {
       window.removeEventListener('scroll', updateActivity);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [token]);
+  }, [token, user?.autoLogoutEnabled]);
 
   // Handle global socket connection when user logs in
   useEffect(() => {
     if (user?.id) {
-      const newSocket = io('https://securechat-flwx.onrender.com');
+      const newSocket = io(import.meta.env.VITE_API_URL);
       setSocket(newSocket);
 
-      newSocket.emit('user_online', user.id);
+      const getDeviceType = () => {
+        const ua = navigator.userAgent;
+        if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) return 'tablet';
+        if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/.test(ua)) return 'mobile';
+        return 'desktop';
+      };
+
+      newSocket.emit('user_online', { userId: user.id, deviceType: getDeviceType() });
 
       newSocket.on('online_users', (users) => {
         setOnlineUsers(users);
@@ -113,6 +129,10 @@ export const AuthProvider = ({ children }) => {
         if (data.receiver._id === user.id) {
           playNotificationSound();
         }
+      });
+
+      newSocket.on('account_disabled', () => {
+        setShowDisabledModal(true);
       });
 
       return () => {
@@ -131,9 +151,155 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
   };
 
+  const updateUser = (updates) => {
+    setUser(prev => {
+      const merged = { ...prev, ...updates };
+      localStorage.setItem('user', JSON.stringify(merged));
+      return merged;
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers }}>
+    <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers, updateUser }}>
       {children}
+      {showDisabledModal && (
+        <div 
+          className="sidebar-overlay" 
+          style={{ 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            background: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            padding: '1.5rem'
+          }}
+        >
+          <div 
+            className="glass-panel" 
+            style={{ 
+              width: '100%', 
+              maxWidth: '400px', 
+              textAlign: 'center',
+              border: '1px solid rgba(248, 81, 73, 0.3)',
+              boxShadow: '0 0 40px rgba(248, 81, 73, 0.15)',
+              animation: 'fadeIn 0.4s ease-out'
+            }}
+          >
+             <div style={{ 
+               fontSize: '3.5rem', 
+               marginBottom: '1rem',
+               filter: 'drop-shadow(0 0 10px rgba(248, 81, 73, 0.4))'
+             }}>🛡️</div>
+             
+             <h2 style={{ 
+               color: 'var(--danger)', 
+               margin: '0 0 1rem 0', 
+               fontSize: '1.5rem', 
+               fontWeight: '900',
+               letterSpacing: '0.05em'
+             }}>ACCESS TERMINATED</h2>
+             
+             <p style={{ 
+               color: 'var(--text-primary)', 
+               fontSize: '0.95rem', 
+               lineHeight: '1.6',
+               marginBottom: '2rem',
+               opacity: 0.9
+             }}>
+               Your account has been deactivated by security administrators. 
+               All active sessions have been terminated.
+             </p>
+             
+             <button 
+               className="btn" 
+               style={{ 
+                 width: '100%', 
+                 padding: '0.8rem', 
+                 background: 'linear-gradient(135deg, #f85149, #991b1b)',
+                 fontSize: '1rem',
+                 fontWeight: 'bold',
+                 boxShadow: '0 4px 15px rgba(248, 81, 73, 0.3)'
+               }}
+               onClick={() => {
+                 setShowDisabledModal(false);
+                 logout();
+               }}
+             >
+               ACKNOWLEDGE
+             </button>
+          </div>
+        </div>
+      )}
+
+      {showTimeoutModal && (
+        <div 
+          className="sidebar-overlay" 
+          style={{ 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            background: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            padding: '1.5rem'
+          }}
+        >
+          <div 
+            className="glass-panel" 
+            style={{ 
+              width: '100%', 
+              maxWidth: '400px', 
+              textAlign: 'center',
+              border: '1px solid rgba(88, 166, 255, 0.3)',
+              boxShadow: '0 0 40px rgba(88, 166, 255, 0.1)',
+              animation: 'fadeIn 0.4s ease-out'
+            }}
+          >
+             <div style={{ 
+               fontSize: '3.5rem', 
+               marginBottom: '1rem',
+               filter: 'drop-shadow(0 0 8px rgba(88, 166, 255, 0.4))'
+             }}>🕒</div>
+             
+             <h2 style={{ 
+               color: 'var(--accent)', 
+               margin: '0 0 1rem 0', 
+               fontSize: '1.5rem', 
+               fontWeight: '900',
+               letterSpacing: '0.05em'
+             }}>SESSION EXPIRED</h2>
+             
+             <p style={{ 
+               color: 'var(--text-primary)', 
+               fontSize: '0.95rem', 
+               lineHeight: '1.6',
+               marginBottom: '2rem',
+               opacity: 0.9
+             }}>
+               {timeoutMessage}
+             </p>
+             
+             <button 
+               className="btn" 
+               style={{ 
+                 width: '100%', 
+                 padding: '0.8rem', 
+                 background: 'linear-gradient(135deg, var(--accent), #1d4ed8)',
+                 fontSize: '1rem',
+                 fontWeight: 'bold',
+                 boxShadow: '0 4px 15px rgba(88, 166, 255, 0.3)'
+               }}
+               onClick={() => {
+                 setShowTimeoutModal(false);
+                 // Redirection happens automatically as logout() was called earlier
+               }}
+             >
+               LOGIN AGAIN
+             </button>
+          </div>
+        </div>
+      )}
     </AuthContext.Provider>
   );
 };

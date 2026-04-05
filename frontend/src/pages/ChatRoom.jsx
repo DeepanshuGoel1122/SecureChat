@@ -11,8 +11,9 @@ function ChatRoom() {
   const [inputMessage, setInputMessage] = useState('');
   const [friendDetails, setFriendDetails] = useState(null);
   
-  const [userState, setUserState] = useState('none'); // 'friend', 'pending', 'blocked', 'none'
+  const [userState, setUserState] = useState('none'); // 'friend', 'sent_pending', 'received_pending', 'blocked', 'none'
   const [sentCount, setSentCount] = useState(0);
+  const [isAccepting, setIsAccepting] = useState(false);
 
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
@@ -29,30 +30,28 @@ function ChatRoom() {
       setIsLoadingChat(true);
       try {
         console.log(`[ChatRoom] Fetching data for friend: ${friendId}`);
-        const res = await fetch(`https://securechat-flwx.onrender.com/api/users/friends/${user.id}`);
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/friends/${user.id}`);
         if (!res.ok) throw new Error(`Friends fetch failed: ${res.status}`);
         const data = await res.json();
         
-        // Robust ID comparison to handle potential type differences
         const isFriend = (data.friends || []).some(f => String(f._id) === String(friendId));
         const isSentReq = (data.sentRequests || []).some(f => String(f._id) === String(friendId));
         const isRecvReq = (data.receivedRequests || []).some(f => String(f._id) === String(friendId));
         const isBlocked = (data.blockedUsers || []).some(f => String(f._id) === String(friendId));
         
-        console.log(`[ChatRoom] State Analysis: isFriend=${isFriend}, isSent=${isSentReq}, isRecv=${isRecvReq}, isBlocked=${isBlocked}`);
-
         if (isBlocked) setUserState('blocked');
         else if (isFriend) setUserState('friend');
-        else if (isSentReq || isRecvReq) setUserState('pending');
+        else if (isRecvReq) setUserState('received_pending');
+        else if (isSentReq) setUserState('sent_pending');
         else setUserState('none');
 
-        const userRes = await fetch(`https://securechat-flwx.onrender.com/api/users/user/${friendId}`);
+        const userRes = await fetch(`${import.meta.env.VITE_API_URL}/api/users/user/${friendId}`);
         if (userRes.ok) {
           const fallbackUser = await userRes.json();
           setFriendDetails(fallbackUser);
         }
         
-        const histRes = await fetch(`https://securechat-flwx.onrender.com/api/messages/history/${user.id}/${friendId}`);
+        const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}`);
         if (histRes.ok) {
           const histData = await histRes.json();
           setMessages(histData);
@@ -145,8 +144,9 @@ function ChatRoom() {
   const sendMessage = (e) => {
     e.preventDefault();
     if (inputMessage.trim() === '' || userState === 'blocked' || userState === 'none') return;
-    if (userState === 'pending' && sentCount >= 10) {
-       alert("Limit of 10 messages reached. Wait for them to accept the request.");
+    
+    if (userState.includes('pending') && sentCount >= 10) {
+       alert("Limit of 10 messages reached. Accept or wait for them to accept to continue.");
        return;
     }
 
@@ -167,9 +167,46 @@ function ChatRoom() {
     }
     
     setInputMessage('');
+    if (inputRef.current) {
+      inputRef.current.style.height = '42px';
+      inputRef.current.focus();
+    }
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
+    }, 10);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
+      e.preventDefault();
+      sendMessage(e);
+    }
+  };
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      const newHeight = Math.min(inputRef.current.scrollHeight, 120);
+      inputRef.current.style.height = (newHeight < 42 ? 42 : newHeight) + 'px';
+    }
+  }, [inputMessage]);
+
+  const handleAcceptRequest = async () => {
+    setIsAccepting(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/accept-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, requesterId: friendId })
+      });
+      if (res.ok) {
+        setUserState('friend');
+      }
+    } catch (err) {
+      console.error('Error accepting request', err);
+    } finally {
+      setIsAccepting(false);
+    }
   };
 
   const handleCopy = (text) => {
@@ -183,7 +220,7 @@ function ChatRoom() {
     setEditingMessage(null);
     setInputMessage('');
     setActiveMenuId(null);
-    setTimeout(() => inputRef.current?.focus(), 100);
+    setTimeout(() => inputRef.current?.focus(), 10);
   };
 
   const handleEdit = (msg) => {
@@ -192,18 +229,40 @@ function ChatRoom() {
     setReplyingTo(null);
     setInputMessage(msg.text);
     setActiveMenuId(null);
-    setTimeout(() => inputRef.current?.focus(), 100);
+    setTimeout(() => inputRef.current?.focus(), 10);
   };
 
   const cancelAction = () => {
     setReplyingTo(null);
     setEditingMessage(null);
     setInputMessage('');
+    inputRef.current?.focus();
   };
 
   const formatTime = (ts) => {
     if (!ts) return '';
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getDateLabel = (ts) => {
+    if (!ts) return '';
+    const date = new Date(ts);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const isSameDay = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+
+    if (isSameDay(date, today)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+
+    const diffTime = Math.abs(today - date);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+    if (diffDays <= 7 && date.getDay() !== today.getDay()) { // within a week but not the same day of week (avoids an edge case)
+      return date.toLocaleDateString([], { weekday: 'long' });
+    }
+
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
   };
 
   const handleScroll = (e) => {
@@ -232,36 +291,56 @@ function ChatRoom() {
 
   return (
     <div className="chat-container" onClick={() => setActiveMenuId(null)}>
-      <div className="glass-panel header" style={{ marginBottom: '1rem', padding: '1rem' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+      <div className="glass-panel chat-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(13,17,23,0.97)' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
           <div style={{ 
-            width: '12px', height: '12px', borderRadius: '50%', 
+            width: '12px', height: '12px', borderRadius: '50%', flexShrink: 0,
             background: isOnline ? 'var(--success)' : 'var(--text-secondary)',
             boxShadow: isOnline ? '0 0 5px var(--success)' : 'none'
           }}></div>
-          <div>
-            <h2 style={{ margin: 0, color: 'var(--text-primary)' }}>Chat with {friendDetails ? friendDetails.username : '...'}</h2>
-            <span style={{ fontSize: '0.85rem', color: isOnline ? 'var(--success)' : 'var(--text-secondary)' }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 'clamp(0.95rem, 4vw, 1.25rem)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Chat with {friendDetails ? friendDetails.username : '...'}</h2>
+            <span style={{ fontSize: '0.8rem', color: isOnline ? 'var(--success)' : 'var(--text-secondary)' }}>
               {isOnline ? 'Online & Secure' : 'Offline'}
             </span>
           </div>
         </div>
-        <button className="btn btn-secondary" onClick={() => navigate('/dashboard')}>Back</button>
+        <button className="btn btn-secondary" style={{ flexShrink: 0, padding: '0.35rem 0.65rem', fontSize: '0.75rem' }} onClick={() => navigate('/dashboard')}>← Back</button>
       </div>
 
       <div className="glass-panel messages-area" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', padding: 0 }}>
         
-        {userState === 'pending' && (
-          <div style={{ background: '#ff9800', color: '#fff', padding: '0.5rem', textAlign: 'center', fontSize: '0.85rem', fontWeight: 'bold', zIndex: 10 }}>
+        <div style={{ width: '100%', padding: '0.4rem', textAlign: 'center', background: 'rgba(0,180,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.03)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)', letterSpacing: '0.02em' }}>
+           <span style={{ fontSize: '0.8rem' }}>🔒</span> Messages are end-to-end encrypted. No one outside of this chat can read them.
+        </div>
+        
+        {userState === 'sent_pending' && (
+          <div style={{ background: 'rgba(255, 152, 0, 0.2)', color: '#ff9800', padding: '0.6rem 1rem', textAlign: 'center', fontSize: '0.85rem', fontWeight: 'bold', zIndex: 10, borderBottom: '1px solid rgba(255,152,0,0.2)' }}>
             Friend request pending. {10 - sentCount > 0 ? (10 - sentCount) : 0}/10 message limit active.
+          </div>
+        )}
+        
+        {userState === 'received_pending' && (
+          <div style={{ background: 'rgba(46, 160, 67, 0.15)', color: 'var(--success)', padding: '0.85rem 1rem', textAlign: 'center', fontSize: '0.9rem', fontWeight: 'bold', zIndex: 10, borderBottom: '1px solid var(--success)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>{friendDetails?.username} sent you a request.</span>
+              <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>({10 - sentCount > 0 ? (10 - sentCount) : 0}/10 trial replies left)</span>
+            </div>
+            <button 
+              className="btn" 
+              style={{ background: 'var(--success)', padding: '0.4rem 1.25rem', fontSize: '0.8rem' }}
+              onClick={handleAcceptRequest}
+              disabled={isAccepting}
+            >
+              {isAccepting ? 'Accepting...' : '✅ Accept Request & Chat'}
+            </button>
           </div>
         )}
 
         <div 
           ref={chatContainerRef}
           onScroll={handleScroll}
-          onClick={(e) => e.stopPropagation()}
-          style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
+          style={{ flex: 1, overflowY: 'auto', padding: '1rem', paddingBottom: '120px', display: 'flex', flexDirection: 'column', gap: '1rem' }}
         >
           {isLoadingChat ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
@@ -275,79 +354,60 @@ function ChatRoom() {
           ) : messages.map((msg, idx) => {
             const isSelf = msg.sender._id === user.id;
             const showMenu = activeMenuId === msg._id;
+            const currentDateLabel = getDateLabel(msg.createdAt);
+            const prevDateLabel = idx > 0 ? getDateLabel(messages[idx - 1].createdAt) : null;
+            const showDateLabel = currentDateLabel !== prevDateLabel;
             
             return (
-              <div 
-                key={msg._id || idx} 
-                id={`msg-${msg._id}`}
-                className={`message ${isSelf ? 'self' : 'other'}`}
-                style={{ position: 'relative', paddingBottom: '1rem', minWidth: '220px', opacity: (userState === 'friend' || userState === 'pending') ? 1 : 0.8 }}
-              >
-                {/* Arrow Button */}
+              <React.Fragment key={msg._id || idx}>
+                {showDateLabel && (
+                  <div style={{ display: 'flex', justifyContent: 'center', margin: '0.8rem 0 0.5rem 0' }}>
+                    <div style={{ background: 'rgba(255, 255, 255, 0.1)', color: 'var(--text-secondary)', padding: '0.2rem 0.7rem', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '500', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', backdropFilter: 'blur(5px)' }}>
+                      {currentDateLabel}
+                    </div>
+                  </div>
+                )}
+                <div 
+                  id={`msg-${msg._id}`}
+                  className={`message ${isSelf ? 'self' : 'other'}`}
+                  style={{ position: 'relative', paddingBottom: '0.4rem', maxWidth: '82%', minWidth: '110px', opacity: (userState === 'friend' || userState.includes('pending')) ? 1 : 0.8 }}
+                >
                 <button 
                   onClick={(e) => { e.stopPropagation(); setActiveMenuId(showMenu ? null : msg._id); }}
                   style={{
-                    position: 'absolute',
-                    top: '8px',
-                    right: '8px',
-                    background: 'rgba(0,0,0,0.3)',
-                    border: 'none',
-                    borderRadius: '50%',
-                    width: '24px',
-                    height: '24px',
-                    color: 'white',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: 0.6
+                    position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.15)', border: 'none', borderRadius: '50%',
+                    width: '18px', height: '18px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5, zIndex: 1
                   }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="6 9 12 15 18 9"></polyline>
                   </svg>
                 </button>
 
-                {/* Dropdown Menu */}
                 {showMenu && (
                   <div style={{
-                    position: 'absolute',
-                    top: '36px',
-                    right: '8px',
-                    background: 'var(--panel-bg)',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '6px',
-                    zIndex: 10,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    overflow: 'hidden',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                    position: 'absolute', top: '24px', right: '4px', background: 'rgba(33, 38, 45, 0.98)', border: '1px solid var(--glass-border)',
+                    borderRadius: '8px', zIndex: 20, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                    width: 'max-content', minWidth: '100px', backdropFilter: 'blur(10px)'
                   }}>
-                    <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.6rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>Copy</button>
-                    {(userState === 'friend' || userState === 'pending') && (
+                    <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Copy</button>
+                    {(userState === 'friend' || userState.includes('pending')) && (
                       <>
-                        <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.6rem 1rem', cursor: 'pointer', textAlign: 'left' }}>Reply</button>
+                        <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Reply</button>
                         {isSelf && (
-                          <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.6rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.05)' }}>Edit</button>
+                          <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
                         )}
                       </>
                     )}
                   </div>
                 )}
 
-                {/* Reply Block */}
                 {msg.replyTo && (
                   <div 
                     onClick={() => scrollToOriginal(msg.replyTo._id)}
                     style={{ 
-                      background: 'rgba(0,0,0,0.15)', 
-                      padding: '0.5rem', 
-                      borderRadius: '4px', 
-                      marginBottom: '0.5rem',
-                      borderLeft: `3px solid ${isSelf ? 'white' : 'var(--accent)'}`,
-                      fontSize: '0.85rem',
-                      opacity: 0.9,
-                      cursor: 'pointer'
+                      background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px', marginBottom: '0.5rem',
+                      borderLeft: `3px solid ${isSelf ? 'white' : 'var(--accent)'}`, fontSize: '0.85rem', opacity: 0.9, cursor: 'pointer'
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
@@ -358,29 +418,21 @@ function ChatRoom() {
                   </div>
                 )}
 
-                <div 
-                  style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'baseline', 
-                    marginBottom: '0.25rem',
-                    paddingRight: '22px'
-                  }}
-                >
-                  <span className="message-sender">{isSelf ? 'You' : msg.sender.username}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    {msg.isEdited && <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>(edited)</span>}
-                    <span style={{ fontSize: '0.7rem', opacity: isSelf ? 0.8 : 0.5 }}>{formatTime(msg.createdAt)}</span>
-                  </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.05rem', paddingRight: '18px' }}>
+                  <span className="message-sender" style={{ fontSize: '0.62rem', fontWeight: '600', opacity: 0.75, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{isSelf ? 'You' : msg.sender.username}</span>
                 </div>
 
-                <div style={{ lineHeight: '1.4' }}>{msg.text}</div>
-                {isSelf && msg.isRead && (
-                  <div style={{ textAlign: 'right', marginTop: '6px', marginBottom: '-6px' }}>
-                    <span style={{ fontSize: '0.65rem', color: '#ffffff', backgroundColor: '#22c55e', padding: '2px 6px', borderRadius: '8px', fontWeight: 'bold' }}>Seen</span>
-                  </div>
-                )}
+                <div style={{ lineHeight: '1.4', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>{msg.text}</div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '0.2rem', gap: '0.35rem' }}>
+                  {msg.isEdited && <span style={{ fontSize: '0.55rem', opacity: 0.6 }}>(edited)</span>}
+                  <span style={{ fontSize: '0.62rem', opacity: isSelf ? 0.7 : 0.45 }}>{formatTime(msg.createdAt)}</span>
+                  {isSelf && msg.isRead && (
+                    <span style={{ fontSize: '0.55rem', background: 'var(--success)', color: 'white', padding: '1px 5px', borderRadius: '6px', fontWeight: 'bold' }}>Seen</span>
+                  )}
+                </div>
               </div>
+            </React.Fragment>
             );
           })}
           <div ref={messagesEndRef} />
@@ -397,40 +449,51 @@ function ChatRoom() {
           </button>
         )}
 
-        {/* Dynamic Content Footer */}
-        <div style={{ borderTop: '1px solid var(--glass-border)', background: 'var(--panel-bg)', minHeight: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ borderTop: '1px solid var(--glass-border)', background: 'var(--panel-bg)', minHeight: '60px', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
           {userState === 'blocked' ? (
             <div style={{ color: '#ffb3b3', fontStyle: 'italic', fontSize: '0.9rem', width: '100%', textAlign: 'center', padding: '1rem', background: 'rgba(255,0,0,0.1)' }}>
               Messaging blocked.
             </div>
           ) : userState === 'none' ? (
              <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.9rem', width: '100%', textAlign: 'center', padding: '1rem' }}>
-              You are no longer friends with this user. Messaging disabled.
+              You are no longer friends.
              </div>
           ) : (
              <div style={{ width: '100%' }}>
-               {(replyingTo || editingMessage) && (
-                 <div style={{ padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                   <span>
-                     {replyingTo && <>Replying to <strong>{replyingTo.sender.username}</strong>: {replyingTo.text.substring(0, 30)}{replyingTo.text.length > 30 ? '...' : ''}</>}
-                     {editingMessage && <>Editing message...</>}
-                   </span>
-                   <button onClick={cancelAction} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', border: 'none' }}>Cancel</button>
-                 </div>
-               )}
-               <form onSubmit={sendMessage} className="input-area" style={{ padding: '1rem', display: 'flex', gap: '1rem', margin: 0 }}>
-                 <input 
-                   type="text" 
-                   ref={inputRef}
-                   className="input-field" 
-                   placeholder={editingMessage ? "Edit your message..." : (userState === 'pending' && sentCount >= 10 ? "Limit reached..." : "Type a message...")} 
-                   value={inputMessage}
-                   onChange={(e) => setInputMessage(e.target.value)}
-                   style={{ marginBottom: 0, flex: 1 }}
-                   disabled={userState === 'pending' && sentCount >= 10}
-                 />
-                 <button type="submit" className="btn" disabled={userState === 'pending' && sentCount >= 10}>{editingMessage ? 'Save' : 'Send'}</button>
-               </form>
+                {(replyingTo || editingMessage) && (
+                  <div style={{ padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                    <span>
+                      {replyingTo && <>Replying to <strong>{replyingTo.sender.username}</strong>: {replyingTo.text.slice(0, 30)}...</>}
+                      {editingMessage && <>Editing message...</>}
+                    </span>
+                    <button onClick={cancelAction} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', border: 'none' }}>Cancel</button>
+                  </div>
+                )}
+                <form onSubmit={sendMessage} className="input-area" style={{ padding: '1rem', display: 'flex', gap: '0.75rem', margin: 0, alignItems: 'flex-end' }}>
+                  <textarea 
+                    ref={inputRef}
+                    className="input-field" 
+                    placeholder={editingMessage ? "Edit your message..." : (userState.includes('pending') && sentCount >= 10 ? "Limit reached..." : "Type a message...")} 
+                    value={inputMessage}
+                    onChange={(e) => setInputMessage(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    style={{ 
+                      marginBottom: 0, 
+                      flex: 1, 
+                      height: '42px', 
+                      minHeight: '42px', 
+                      maxHeight: '120px', 
+                      resize: 'none', 
+                      padding: '0.65rem 0.9rem',
+                      lineHeight: '1.4',
+                      overflowY: inputMessage.length > 100 ? 'auto' : 'hidden'
+                    }}
+                    disabled={userState.includes('pending') && sentCount >= 10}
+                  />
+                  <button type="submit" className="btn" style={{ padding: '0.65rem 1.25rem', height: '42px' }} disabled={userState.includes('pending') && sentCount >= 10}>
+                    {editingMessage ? 'Save' : 'Send'}
+                  </button>
+                </form>
              </div>
           )}
         </div>

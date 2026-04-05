@@ -20,7 +20,7 @@ function Login() {
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
     
     try {
-      const response = await fetch(`https://securechat-flwx.onrender.com${endpoint}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -73,6 +73,8 @@ function Login() {
               placeholder="Username" 
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
               required 
             />
             <input 
@@ -95,7 +97,18 @@ function Login() {
               {isLogin ? 'Sign up' : 'Sign in'}
             </span>
           </div>
+
+          <div style={{ marginTop: '1.5rem', padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+             <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>⚠️ Reminder:</span> Kindly remember your User ID and Password. Both are <span style={{ color: 'white' }}>case-sensitive</span>.
+             </p>
+          </div>
         </div>
+      </div>
+
+      <div style={{ marginTop: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: 0.6 }}>
+         <span style={{ fontSize: '0.9rem' }}>🛡️</span>
+         <span style={{ fontSize: '0.8rem', letterSpacing: '0.05em' }}>END-TO-END ENCRYPTED & SECURE</span>
       </div>
 
     </div>

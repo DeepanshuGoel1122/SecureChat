@@ -31,7 +31,7 @@ function Dashboard() {
   const profileMenuRef = useRef(null);
   
   const navigate = useNavigate();
-  const { user, logout, socket, onlineUsers } = useContext(AuthContext);
+  const { user, logout, socket, onlineUsers, updateUser } = useContext(AuthContext);
 
   useEffect(() => {
     if (user) {
@@ -65,7 +65,7 @@ function Dashboard() {
   const fetchFriends = async () => {
     setIsFriendsLoading(true);
     try {
-      const res = await fetch(`https://securechat-flwx.onrender.com/api/users/friends/${user.id}`);
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/friends/${user.id}`);
       const data = await res.json();
       setFriends(data.friends || []);
       setActiveChats(data.activeChats || []);
@@ -81,7 +81,7 @@ function Dashboard() {
 
   const fetchUnreadCounts = async () => {
     try {
-      const res = await fetch(`https://securechat-flwx.onrender.com/api/messages/unread/${user.id}`);
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/unread/${user.id}`);
       const data = await res.json();
       setUnreadCounts(data || {});
     } catch (err) {}
@@ -93,7 +93,7 @@ function Dashboard() {
     setIsSearching(true);
     setHasSearched(false);
     try {
-      const res = await fetch(`https://securechat-flwx.onrender.com/api/users/search?q=${searchQuery}&userId=${user.id}`);
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/search?q=${searchQuery}&userId=${user.id}`);
       const data = await res.json();
       setSearchResults(data); 
       setHasSearched(true);
@@ -106,7 +106,7 @@ function Dashboard() {
 
   const executeAction = async (endpoint, payload) => {
     try {
-      await fetch(`https://securechat-flwx.onrender.com/api/users/${endpoint}`, {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/users/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -147,7 +147,7 @@ function Dashboard() {
     if (deleteConfirm.step === 1) return setDeleteConfirm({ friendId, step: 2 });
     if (deleteConfirm.step === 2) {
       try {
-        await fetch(`https://securechat-flwx.onrender.com/api/messages/history/${user.id}/${friendId}`, { method: 'DELETE' });
+        await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}`, { method: 'DELETE' });
         setDeleteConfirm({ friendId: null, step: 0 });
         fetchFriends(); 
         fetchUnreadCounts();
@@ -166,6 +166,22 @@ function Dashboard() {
     if (removeConfirm.step === 1) return { color: 'white' };
     if (removeConfirm.step === 2) return { color: 'white', fontWeight: 'bold' };
   };
+  
+  const handleToggleAutoLogout = async () => {
+    // Treat undefined as true (default)
+    const currentVal = user.autoLogoutEnabled !== false;
+    const newVal = !currentVal;
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/users/toggle-autologout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, autoLogoutEnabled: newVal })
+      });
+      updateUser({ autoLogoutEnabled: newVal });
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleChangePassword = async (e) => {
     e.preventDefault();
@@ -173,7 +189,7 @@ function Dashboard() {
     setLoadingChangePassword(true);
     setPasswordMessage({ text: '', type: '' });
     try {
-      const res = await fetch('https://securechat-flwx.onrender.com/api/auth/change-password', {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/change-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.id, ...passwordForm })
@@ -205,7 +221,7 @@ function Dashboard() {
     setDeleteModal(prev => ({ ...prev, loading: true, error: '' }));
     try {
       // Verify password first by attempting login
-      const verifyRes = await fetch('https://securechat-flwx.onrender.com/api/auth/login', {
+      const verifyRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: user.username, password: deleteModal.password })
@@ -215,7 +231,7 @@ function Dashboard() {
         return;
       }
       // Password verified, proceed with soft delete
-      await fetch('https://securechat-flwx.onrender.com/api/auth/soft-delete', {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/auth/soft-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.id })
@@ -233,32 +249,61 @@ function Dashboard() {
   };
 
   return (
-    <div className="dashboard-container" style={{ flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '2rem', width: '100%', minHeight: '100vh', padding: '1rem', boxSizing: 'border-box' }} onClick={() => { setDeleteConfirm({ friendId: null, step: 0 }); setRemoveConfirm({ friendId: null, step: 0 }); setIsProfileMenuOpen(false); }}>
+    <div className="dashboard-container" onClick={() => { setDeleteConfirm({ friendId: null, step: 0 }); setRemoveConfirm({ friendId: null, step: 0 }); setIsProfileMenuOpen(false); }}>
       
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '700px', margin: '0 auto 2rem auto' }}>
-        <h1 style={{ margin: 0, background: 'linear-gradient(to right, #58a6ff, #a371f7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: '1.75rem' }}>SecureChat</h1>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <button className="btn" style={{ padding: '0.4rem 1rem', fontSize: '0.9rem' }} onClick={() => setIsSidebarOpen(true)}>Friends / Add &rarr;</button>
+      {/* Sticky header */}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 20,
+        background: 'rgba(13,17,23,0.95)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        borderBottom: '1px solid var(--glass-border)',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        width: '100%', padding: '0.75rem 1rem',
+        boxSizing: 'border-box'
+      }}>
+        <h1 style={{ margin: 0, background: 'linear-gradient(to right, #58a6ff, #a371f7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: 'clamp(1.1rem, 5vw, 1.75rem)', flexShrink: 0 }}>SecureChat</h1>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', minWidth: 0 }}>
+          <button className="btn" style={{ padding: '0.4rem 0.7rem', fontSize: '0.8rem', flexShrink: 0 }} onClick={() => setIsSidebarOpen(true)}>Friends +</button>
           
           <div style={{ position: 'relative' }} ref={profileMenuRef}>
             <div 
               onClick={(e) => { e.stopPropagation(); setIsProfileMenuOpen(!isProfileMenuOpen); setIsChangePasswordOpen(false); setPasswordMessage({ text: '', type: '' }); }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', padding: '0.4rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', padding: '0.4rem 0.6rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', minWidth: 0 }}
             >
-              <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.75rem', color: 'white' }}>
+              <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.75rem', color: 'white', flexShrink: 0 }}>
                 {user?.username?.charAt(0).toUpperCase()}
               </div>
-              <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: '500' }}>{user?.username}</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.username}</span>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>▼</span>
             </div>
 
             {isProfileMenuOpen && (
               <div 
                 onClick={(e) => e.stopPropagation()}
-                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '190px', background: 'rgba(15,15,22,0.97)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)' }}
+                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '220px', background: 'rgba(15,15,22,0.97)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)' }}
               >
                 {!isChangePasswordOpen ? (
                   <>
+                    <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Auto-logout (3hrs)</span>
+                      <div 
+                        onClick={handleToggleAutoLogout}
+                        style={{ 
+                          width: '34px', height: '18px', 
+                          background: user.autoLogoutEnabled !== false ? 'var(--success)' : '#333', 
+                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s' 
+                        }}
+                      >
+                        <div style={{ 
+                          width: '14px', height: '14px', background: 'white', borderRadius: '50%', 
+                          position: 'absolute', top: '2px', 
+                          left: user.autoLogoutEnabled !== false ? '18px' : '2px', 
+                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)' 
+                        }} />
+                      </div>
+                    </div>
+                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
                     <button 
                       style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
@@ -327,8 +372,17 @@ function Dashboard() {
         </div>
       </div>
       
+      {/* Dashboard content area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '1rem', overflowY: 'auto' }}>
       <div className="glass-panel dashboard-box" style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '1rem', margin: '0 auto' }} onClick={(e) => e.stopPropagation()}>
-        <h2 className="auth-title" style={{ textAlign: 'left', marginBottom: '0.5rem', fontSize: '1.25rem', background: 'none', WebkitTextFillColor: 'var(--text-primary)' }}>Your Chats</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+          <h2 className="auth-title" style={{ textAlign: 'left', marginBottom: 0, fontSize: '1.25rem', background: 'none', WebkitTextFillColor: 'var(--text-primary)' }}>Your Chats</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', opacity: 0.6 }}>
+             <span style={{ fontSize: '0.75rem' }}>🛡️</span>
+             <span style={{ fontSize: '0.65rem', fontWeight: 'bold', letterSpacing: '0.03em' }}>END-TO-END ENCRYPTED</span>
+          </div>
+        </div>
+        <p style={{ margin: '0 0 1rem 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>All your conversations are secure and private.</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {isFriendsLoading ? (
             <div style={{ textAlign: 'center', padding: '1.5rem' }}>
@@ -359,124 +413,138 @@ function Dashboard() {
           )}
         </div>
       </div>
+      </div>
 
       {isSidebarOpen && (
         <div className="sidebar-overlay" onClick={() => setIsSidebarOpen(false)}>
           <div className="sidebar-content" onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ margin: 0, fontSize: '1.4rem' }}>Friends / Requests</h2>
-              <button onClick={() => setIsSidebarOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '2rem', cursor: 'pointer', lineHeight: '1rem', padding: 0 }}>&times;</button>
+            {/* Sticky top: header + search */}
+            <div className="sidebar-sticky-top">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Friends &amp; Requests</h2>
+                <button onClick={() => setIsSidebarOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '2rem', cursor: 'pointer', lineHeight: '1rem', padding: 0 }}>&times;</button>
+              </div>
+              <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.95rem' }}>Find Users</h3>
+              <form onSubmit={searchUsers} style={{ display: 'flex', gap: '0.5rem' }}>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  placeholder="Search username..." 
+                  value={searchQuery} 
+                  onChange={(e) => setSearchQuery(e.target.value)} 
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  style={{ marginBottom: 0, flex: 1, minWidth: 0 }} 
+                />
+                <button type="submit" className="btn" style={{ padding: '0.5rem 0.8rem', flexShrink: 0 }}>Search</button>
+              </form>
             </div>
 
-            {/* Search */}
-            <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Find Users</h3>
-            <form onSubmit={searchUsers} style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-              <input type="text" className="input-field" placeholder="Search username..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ marginBottom: 0, flex: 1 }} />
-              <button type="submit" className="btn" style={{ padding: '0.5rem 1rem' }}>Search</button>
-            </form>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', minHeight: '40px' }}>
-              {isSearching && (
-                <div style={{ textAlign: 'center', padding: '1rem' }}>
-                  <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Searching users...</div>
-                </div>
-              )}
-              {!isSearching && hasSearched && searchResults.length === 0 && <div style={{ padding: '0.75rem', color: 'var(--danger)', textAlign: 'center', background: 'rgba(255,0,0,0.1)', borderRadius: '8px', fontSize: '0.9rem' }}>User not found.</div>}
-              {!isSearching && searchResults.map(u => (
-                <div key={u._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.95rem' }}>{u.username}</span>
-                  {friends.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>Added</span> : 
-                   sentRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending Req</span> :
-                   receivedRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>See Below</span> :
-                  <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }} onClick={() => handleSendRequest(u._id)}>Send Request</button>}
-                </div>
-              ))}
-            </div>
-            
-            <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', marginBottom: '1rem' }} />
+            {/* Scrollable content */}
+            <div className="sidebar-scrollable">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', minHeight: '40px' }}>
+                {isSearching && (
+                  <div style={{ textAlign: 'center', padding: '1rem' }}>
+                    <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Searching users...</div>
+                  </div>
+                )}
+                {!isSearching && hasSearched && searchResults.length === 0 && <div style={{ padding: '0.75rem', color: 'var(--danger)', textAlign: 'center', background: 'rgba(255,0,0,0.1)', borderRadius: '8px', fontSize: '0.9rem' }}>User not found.</div>}
+                {!isSearching && searchResults.map(u => (
+                  <div key={u._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.95rem' }}>{u.username}</span>
+                    {friends.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>Added</span> : 
+                     sentRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending Req</span> :
+                     receivedRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>See Below</span> :
+                    <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }} onClick={() => handleSendRequest(u._id)}>Send Request</button>}
+                  </div>
+                ))}
+              </div>
 
-            {/* Incoming Requests */}
-            {receivedRequests.length > 0 && (
-              <>
-                <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem', color: 'var(--accent)' }}>Incoming Requests</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                  {receivedRequests.map(r => (
-                    <div key={r._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                       <span style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>{r.username} wants to connect</span>
-                       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                         <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleAcceptRequest(r._id)}>Accept</button>
-                         <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleRejectRequest(r._id)}>Reject</button>
-                         <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, color: 'var(--danger)', fontSize: '0.75rem' }} onClick={() => handleBlockUser(r._id)}>Block</button>
-                       </div>
-                       <button className="btn btn-secondary" style={{ padding: '0.4rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${r._id}`); }}>Message (10 Limit)</button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+              <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', marginBottom: '1rem' }} />
 
-            {/* Connected Friends */}
-            <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Active Friends</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', minHeight: '60px' }}>
-               {isFriendsLoading ? (
-                 <div style={{ textAlign: 'center', padding: '1rem' }}>
-                   <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
-                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Loading friends...</div>
-                 </div>
-               ) : friends.length === 0 ? (
-                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No active friends yet.</span>
-               ) : (
-                 friends.map(f => (
-                    <div key={f._id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
-                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.includes(f._id) ? 'var(--success)' : 'var(--text-secondary)' }}></div>
-                            <span style={{ fontSize: '0.95rem' }}>{f.username}</span>
+              {/* Incoming Requests */}
+              {receivedRequests.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem', color: 'var(--accent)' }}>Incoming Requests</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                    {receivedRequests.map(r => (
+                      <div key={r._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                         <span style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>{r.username} wants to connect</span>
+                         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                           <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleAcceptRequest(r._id)}>Accept</button>
+                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleRejectRequest(r._id)}>Reject</button>
+                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, color: 'var(--danger)', fontSize: '0.75rem' }} onClick={() => handleBlockUser(r._id)}>Block</button>
                          </div>
-                         <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>Chat</button>
-                       </div>
-                       <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '1rem', marginTop: '0.25rem' }}>
-                         <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, ...getRemoveStyle(f._id) }} onClick={(e) => handleRemoveFriend(e, f._id)}>{getRemoveText(f._id)}</button>
-                         <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, color: 'var(--danger)' }} onClick={() => handleBlockUser(f._id)}>Block User</button>
-                       </div>
-                    </div>
-                 ))
-               )}
+                         <button className="btn btn-secondary" style={{ padding: '0.4rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${r._id}`); }}>Message (10 Limit)</button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Connected Friends */}
+              <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Active Friends</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', minHeight: '60px' }}>
+                 {isFriendsLoading ? (
+                   <div style={{ textAlign: 'center', padding: '1rem' }}>
+                     <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
+                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Loading friends...</div>
+                   </div>
+                 ) : friends.length === 0 ? (
+                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No active friends yet.</span>
+                 ) : (
+                   friends.map(f => (
+                      <div key={f._id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.includes(f._id) ? 'var(--success)' : 'var(--text-secondary)' }}></div>
+                              <span style={{ fontSize: '0.95rem' }}>{f.username}</span>
+                           </div>
+                           <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>Chat</button>
+                         </div>
+                         <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '1rem', marginTop: '0.25rem' }}>
+                           <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, ...getRemoveStyle(f._id) }} onClick={(e) => handleRemoveFriend(e, f._id)}>{getRemoveText(f._id)}</button>
+                           <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, color: 'var(--danger)' }} onClick={() => handleBlockUser(f._id)}>Block User</button>
+                         </div>
+                      </div>
+                   ))
+                 )}
+              </div>
+
+              {/* Waiting Requests */}
+              {sentRequests.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Sent Requests (Pending)</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', opacity: 0.9 }}>
+                    {sentRequests.map(s => (
+                      <div key={s._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                           <span style={{ fontSize: '0.9rem' }}>{s.username}</span>
+                           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending...</span>
+                         </div>
+                         <button className="btn btn-secondary" style={{ padding: '0.3rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${s._id}`); }}>Message (10 Limit)</button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Blocked Users */}
+              {blockedUsers.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--danger)' }}>Blocked Users</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', border: '1px solid rgba(255,0,0,0.2)', padding: '0.5rem', borderRadius: '8px' }}>
+                    {blockedUsers.map(b => (
+                      <div key={b._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,0,0,0.1)', borderRadius: '8px' }}>
+                         <span style={{ fontSize: '0.9rem', color: '#ffb3b3' }}>{b.username}</span>
+                         <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }} onClick={() => handleUnblockUser(b._id)}>Unblock</button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-
-            {/* Waiting Requests */}
-            {sentRequests.length > 0 && (
-              <>
-                <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Sent Requests (Pending)</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', opacity: 0.9 }}>
-                  {sentRequests.map(s => (
-                    <div key={s._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
-                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                         <span style={{ fontSize: '0.9rem' }}>{s.username}</span>
-                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending...</span>
-                       </div>
-                       <button className="btn btn-secondary" style={{ padding: '0.3rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${s._id}`); }}>Message (10 Limit)</button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {/* Blocked Users */}
-            {blockedUsers.length > 0 && (
-              <>
-                <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--danger)' }}>Blocked Users</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', border: '1px solid rgba(255,0,0,0.2)', padding: '0.5rem', borderRadius: '8px' }}>
-                  {blockedUsers.map(b => (
-                    <div key={b._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,0,0,0.1)', borderRadius: '8px' }}>
-                       <span style={{ fontSize: '0.9rem', color: '#ffb3b3' }}>{b.username}</span>
-                       <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }} onClick={() => handleUnblockUser(b._id)}>Unblock</button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-            
           </div>
         </div>
       )}
