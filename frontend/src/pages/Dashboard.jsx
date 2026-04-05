@@ -31,7 +31,15 @@ function Dashboard() {
   const profileMenuRef = useRef(null);
   
   const navigate = useNavigate();
-  const { user, logout, socket, onlineUsers, updateUser } = useContext(AuthContext);
+  const { user, logout, socket, onlineUsers, updateUser, pushEnabled, enablePushNotifications, disablePushNotifications } = useContext(AuthContext);
+
+  const handleTogglePushNotifications = async () => {
+    if (pushEnabled) {
+      await disablePushNotifications();
+    } else {
+      await enablePushNotifications();
+    }
+  };
 
   useEffect(() => {
     if (user) {
@@ -57,8 +65,19 @@ function Dashboard() {
           fetchFriends(); 
         }
       };
+      
+      const handleFriendReq = () => {
+        console.log('Incoming friend request received via socket!');
+        fetchFriends();
+      };
+      
       socket.on('receive_message', handleIncoming);
-      return () => socket.off('receive_message', handleIncoming);
+      socket.on('friend_request_received', handleFriendReq);
+      
+      return () => {
+        socket.off('receive_message', handleIncoming);
+        socket.off('friend_request_received', handleFriendReq);
+      };
     }
   }, [socket, user]);
 
@@ -264,7 +283,12 @@ function Dashboard() {
       }}>
         <h1 style={{ margin: 0, background: 'linear-gradient(to right, #58a6ff, #a371f7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: 'clamp(1.1rem, 5vw, 1.75rem)', flexShrink: 0 }}>SecureChat</h1>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', minWidth: 0 }}>
-          <button className="btn" style={{ padding: '0.4rem 0.7rem', fontSize: '0.8rem', flexShrink: 0 }} onClick={() => setIsSidebarOpen(true)}>Friends +</button>
+          <button className="btn" style={{ position: 'relative', padding: '0.4rem 0.7rem', fontSize: '0.8rem', flexShrink: 0 }} onClick={() => setIsSidebarOpen(true)}>
+            Friends +
+            {receivedRequests.length > 0 && (
+              <span style={{ position: 'absolute', top: '-6px', right: '-6px', width: '16px', height: '16px', background: 'var(--danger)', borderRadius: '50%', border: '2px solid rgba(13,17,23,0.95)', animation: 'pulseBadge 2s infinite' }}></span>
+            )}
+          </button>
           
           <div style={{ position: 'relative' }} ref={profileMenuRef}>
             <div 
@@ -299,6 +323,24 @@ function Dashboard() {
                           width: '14px', height: '14px', background: 'white', borderRadius: '50%', 
                           position: 'absolute', top: '2px', 
                           left: user.autoLogoutEnabled !== false ? '18px' : '2px', 
+                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)' 
+                        }} />
+                      </div>
+                    </div>
+                    <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Push Notifications</span>
+                      <div 
+                        onClick={handleTogglePushNotifications}
+                        style={{ 
+                          width: '34px', height: '18px', 
+                          background: pushEnabled ? 'var(--success)' : '#333', 
+                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s' 
+                        }}
+                      >
+                        <div style={{ 
+                          width: '14px', height: '14px', background: 'white', borderRadius: '50%', 
+                          position: 'absolute', top: '2px', 
+                          left: pushEnabled ? '18px' : '2px', 
                           transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)' 
                         }} />
                       </div>

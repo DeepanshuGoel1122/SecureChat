@@ -44,6 +44,10 @@ router.post('/add-friend', async (req, res) => {
     
     await sender.save();
     await receiver.save();
+    
+    // Notify receiver in real-time
+    req.io.to(friendId).emit('friend_request_received');
+    
     res.json({ message: 'Friend request sent' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -216,6 +220,31 @@ router.post('/toggle-autologout', async (req, res) => {
     user.autoLogoutEnabled = autoLogoutEnabled;
     await user.save();
     res.json({ message: 'Preference updated', autoLogoutEnabled: user.autoLogoutEnabled });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+// Save Push Subscription
+router.post('/subscribe', async (req, res) => {
+  try {
+    const { userId, subscription } = req.body;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    
+    user.pushSubscription = subscription;
+    await user.save();
+    res.status(201).json({ message: 'Push subscription saved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Disable Push Subscription
+router.post('/unsubscribe', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    await User.findByIdAndUpdate(userId, { pushSubscription: null });
+    res.json({ message: 'Unsubscribed successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }

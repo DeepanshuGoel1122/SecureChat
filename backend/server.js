@@ -13,6 +13,16 @@ const Message = require('./models/Message');
 
 dotenv.config();
 
+const webPush = require('web-push');
+
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webPush.setVapidDetails(
+    'mailto:test@securechat.com',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -104,6 +114,22 @@ io.on('connection', (socket) => {
 
       io.to(data.receiverId).emit('receive_message', populatedMsg);
       io.to(data.senderId).emit('receive_message', populatedMsg);
+
+      // Trigger Push Notification if user is offline
+      const isOnline = Array.from(onlineUsers.values()).some(u => u.userId === data.receiverId);
+      if (!isOnline && receiverObj.pushSubscription) {
+        try {
+          const payload = JSON.stringify({
+            title: `New message from ${populatedMsg.sender.username}`,
+            body: populatedMsg.text.length > 30 ? populatedMsg.text.substring(0, 30) + '...' : populatedMsg.text,
+            url: `/chat/${data.senderId}`
+          });
+          await webPush.sendNotification(receiverObj.pushSubscription, payload);
+          console.log(`Push notification sent to ${populatedMsg.receiver.username}`);
+        } catch (pushErr) {
+          console.error('Error sending push notification:', pushErr);
+        }
+      }
     } catch (err) {
       console.error('Error saving/sending socket message:', err);
     }

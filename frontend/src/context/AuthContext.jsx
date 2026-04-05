@@ -35,6 +35,7 @@ export const AuthProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [showDisabledModal, setShowDisabledModal] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   const [timeoutMessage, setTimeoutMessage] = useState('');
 
@@ -106,6 +107,91 @@ export const AuthProvider = ({ children }) => {
     };
   }, [token, user?.autoLogoutEnabled]);
 
+  // Base64 to Uint8Array helper for VAPID key
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  const enablePushNotifications = async (silent = false) => {
+    if (!user?.id || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      if (!silent) alert("Push notifications are not supported in your current browser.");
+      return false;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        if (!silent) alert("Notification permissions denied by user.");
+        return false;
+      }
+
+      const register = await navigator.serviceWorker.register('/sw.js');
+      const readyReg = await navigator.serviceWorker.ready;
+      
+      let subscription = await readyReg.pushManager.getSubscription();
+      
+      if (!subscription) {
+        const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+        subscription = await readyReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+      }
+      
+      // Send subscription to backend
+      await fetch(`${import.meta.env.VITE_API_URL}/api/users/subscribe`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ userId: user.id, subscription })
+      });
+      setPushEnabled(true);
+      return true;
+    } catch (err) {
+      console.error('Push registration error:', err);
+      return false;
+    }
+  };
+
+  const disablePushNotifications = async () => {
+    try {
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+         const readyReg = await navigator.serviceWorker.ready;
+         const subscription = await readyReg.pushManager.getSubscription();
+         if (subscription) {
+           await subscription.unsubscribe();
+         }
+      }
+      setPushEnabled(false);
+      await fetch(`${import.meta.env.VITE_API_URL}/api/users/unsubscribe`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ userId: user.id })
+      });
+    } catch (err) {
+      console.error('Push unregistration error:', err);
+    }
+  };
+
+  // Push Notification Setup (Silent check on load if already granted)
+  useEffect(() => {
+    if (user?.id && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(async (reg) => {
+        const sub = await reg.pushManager.getSubscription();
+        setPushEnabled(!!sub);
+        if (sub && Notification.permission === 'granted') {
+           enablePushNotifications(true).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+  }, [user?.id]);
+
   // Handle global socket connection when user logs in
   useEffect(() => {
     if (user?.id) {
@@ -122,7 +208,7 @@ export const AuthProvider = ({ children }) => {
       newSocket.emit('user_online', { userId: user.id, deviceType: getDeviceType() });
 
       newSocket.on('online_users', (users) => {
-        setOnlineUsers(users);
+        setOnlineUsers(users.map(u => typeof u === 'string' ? u : u.userId));
       });
       
       newSocket.on('receive_message', (data) => {
@@ -160,7 +246,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers, updateUser }}>
+    <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers, updateUser, pushEnabled, enablePushNotifications, disablePushNotifications }}>
       {children}
       {showDisabledModal && (
         <div 

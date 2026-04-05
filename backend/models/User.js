@@ -21,6 +21,7 @@ const UserSchema = new mongoose.Schema({
   blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   lastOnline: { type: Date, default: Date.now },
   autoLogoutEnabled: { type: Boolean, default: true },
+  pushSubscription: { type: Object, default: null },
   lastLoginMetadata: {
     deviceType: String,
     os: String,
