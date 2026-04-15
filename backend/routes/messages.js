@@ -1,9 +1,65 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const Message = require('../models/Message');
 const User = require('../models/User');
 
 const router = express.Router();
+
+// Cloudinary config
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Multer storage for Cloudinary
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: async (req, file) => {
+    const isHD = req.query.quality === 'hd';
+    return {
+      folder: 'secure_chat_images',
+      allowed_formats: ['jpg', 'png', 'jpeg', 'gif', 'webp'],
+      transformation: isHD
+        ? [{ quality: 'auto:best' }]
+        : [{ width: 1920, height: 1920, crop: 'limit', quality: 'auto:good' }]
+    };
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 15 * 1024 * 1024 } // 15MB limit (compression happens client-side)
+});
+
+// Upload image route
+const uploadMiddleware = upload.single('image');
+
+router.post('/upload', (req, res) => {
+  console.log("Upload request received...");
+  uploadMiddleware(req, res, function (err) {
+    if (err instanceof multer.MulterError) {
+      console.error('Multer event error during upload:', err);
+      return res.status(400).json({ message: 'Upload format/size error: ' + err.message });
+    } else if (err) {
+      console.error('General error during Cloudinary upload:', JSON.stringify(err));
+      const errMsg = err.message || JSON.stringify(err) || 'Unknown error';
+      return res.status(500).json({ message: 'Upload engine error: ' + errMsg });
+    }
+    
+    if (!req.file) {
+      console.log("No file was appended to request.");
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+    
+    console.log("Upload to Cloudinary successful. File URL:", req.file.path);
+    res.json({ imageUrl: req.file.path });
+  });
+});
+
 const ObjectId = mongoose.Types.ObjectId;
 
 // Get history

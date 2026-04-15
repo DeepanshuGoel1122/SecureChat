@@ -2,3 +2,5 @@ Backup/
 node_modules/
 .env
 .env.local
+vapid.json
+vapid.txt

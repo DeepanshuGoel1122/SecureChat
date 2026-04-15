@@ -358,6 +358,23 @@ body {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Image message specific styles */
+.message img {
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.message img:hover {
+  filter: brightness(1.1);
+}
+
+.input-area .btn-secondary svg {
+  transition: color 0.2s ease;
+}
+
+.input-area .btn-secondary:hover svg {
+  color: var(--accent);
+}
+
 /* ===== SIDEBAR ===== */
 .sidebar-overlay {
   position: fixed;
