@@ -37,7 +37,9 @@ const UserSchema = new mongoose.Schema({
     type: Map,
     of: Date,
     default: {}
-  }
+  },
+  allowMessageDelete: { type: Boolean, default: false },
+  canDeleteMessages: { type: Boolean, default: true }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', UserSchema);

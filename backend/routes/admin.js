@@ -138,4 +138,48 @@ router.post('/remove-blacklist', async (req, res) => {
   }
 });
 
+// Get admin settings (for frontend to check delete permission etc.)
+router.get('/settings', async (req, res) => {
+  try {
+    const admin = await User.findOne({ role: 'admin' });
+    if (!admin) return res.status(404).json({ message: 'Admin not found' });
+    res.json({ allowMessageDelete: admin.allowMessageDelete || false });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Toggle message delete permission (global)
+router.post('/toggle-delete', async (req, res) => {
+  try {
+    const { allowMessageDelete } = req.body;
+    const admin = await User.findOne({ role: 'admin' });
+    if (!admin) return res.status(404).json({ message: 'Admin not found' });
+    admin.allowMessageDelete = allowMessageDelete;
+    await admin.save();
+
+    // When global is toggled, sync all users' canDeleteMessages to match
+    await User.updateMany({ role: { $ne: 'admin' } }, { canDeleteMessages: allowMessageDelete });
+
+    res.json({ message: 'Setting updated', allowMessageDelete });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Toggle per-user delete permission
+router.post('/toggle-user-delete', async (req, res) => {
+  try {
+    const { userId, canDeleteMessages } = req.body;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    user.canDeleteMessages = canDeleteMessages;
+    await user.save();
+    res.json({ message: 'User setting updated', canDeleteMessages });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
+

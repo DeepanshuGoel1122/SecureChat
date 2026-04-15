@@ -87,6 +87,18 @@ router.post('/reject-request', async (req, res) => {
   }
 });
 
+// Cancel Sent Request
+router.post('/cancel-request', async (req, res) => {
+  try {
+    const { userId, receiverId } = req.body;
+    await User.findByIdAndUpdate(userId, { $pull: { sentRequests: receiverId } });
+    await User.findByIdAndUpdate(receiverId, { $pull: { receivedRequests: userId } });
+    res.json({ message: 'Friend request cancelled' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Remove friend
 router.post('/remove-friend', async (req, res) => {
   try {
@@ -138,7 +150,7 @@ router.post('/unblock-user', async (req, res) => {
 // Get user profile explicitly
 router.get('/user/:id', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('_id username');
+    const user = await User.findById(req.params.id).select('_id username canDeleteMessages');
     res.json(user);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });

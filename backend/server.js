@@ -65,10 +65,36 @@ const onlineUsers = new Map(); // Maps socket.id -> userId
 io.on('connection', (socket) => {
   console.log('User connected to socket:', socket.id);
 
-  socket.on('user_online', (data) => {
+  socket.on('user_online', async (data) => {
     const { userId, deviceType } = typeof data === 'string' ? { userId: data, deviceType: 'desktop' } : data;
     socket.join(userId);
     onlineUsers.set(socket.id, { userId, deviceType });
+    
+    // Auto-update system metadata for users actively connecting
+    try {
+      const User = require('./models/User');
+      const uaString = socket.handshake?.headers?.['user-agent'];
+      if (uaString) {
+        const UAParser = require('ua-parser-js');
+        const parser = new UAParser(uaString);
+        const resUA = parser.getResult();
+        
+        const metadata = {
+          deviceType: resUA.device.type || deviceType || 'desktop',
+          os: resUA.os.name || 'Unknown OS',
+          browser: resUA.browser.name || 'Unknown Browser',
+          brand: resUA.device.vendor || (resUA.os.name === 'iOS' ? 'Apple' : resUA.os.name) || 'Generic',
+          model: resUA.device.model || (resUA.device.type ? `${resUA.device.type} device` : 'Device')
+        };
+        if (metadata.deviceType === 'desktop' && metadata.brand === 'Generic') {
+          metadata.brand = 'Personal Computer';
+        }
+
+        await User.findByIdAndUpdate(userId, { lastLoginMetadata: metadata });
+      }
+    } catch (e) {
+      console.error('Error updating metadata on connect:', e);
+    }
     
     const uniqueUsers = Array.from(onlineUsers.values());
     io.emit('online_users', uniqueUsers);
@@ -178,6 +204,37 @@ io.on('connection', (socket) => {
      if (res.modifiedCount > 0) {
        io.to(friendId).emit('messages_read', { byUserId: userId });
      }
+  });
+
+  socket.on('delete_message', async ({ messageId, userId }) => {
+    try {
+      const User = require('./models/User');
+
+      // Check per-user delete permission
+      const senderUser = await User.findById(userId);
+      if (!senderUser || senderUser.canDeleteMessages === false) {
+        return io.to(userId).emit('chat_error', 'Message deletion is disabled for your account.');
+      }
+
+      const message = await Message.findById(messageId);
+      if (!message) return;
+
+      // Only the sender can delete their own message
+      if (message.sender.toString() !== userId) {
+        return io.to(userId).emit('chat_error', 'You can only delete your own messages.');
+      }
+
+      const receiverId = message.receiver.toString();
+      const senderId = message.sender.toString();
+
+      await Message.findByIdAndDelete(messageId);
+
+      // Notify both sender and receiver to remove from their UI
+      io.to(senderId).emit('message_deleted', { messageId });
+      io.to(receiverId).emit('message_deleted', { messageId });
+    } catch (err) {
+      console.error('Error deleting message:', err);
+    }
   });
 
   socket.on('disconnect', async () => {

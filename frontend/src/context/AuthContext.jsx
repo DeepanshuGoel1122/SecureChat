@@ -208,7 +208,7 @@ export const AuthProvider = ({ children }) => {
       newSocket.emit('user_online', { userId: user.id, deviceType: getDeviceType() });
 
       newSocket.on('online_users', (users) => {
-        setOnlineUsers(users.map(u => typeof u === 'string' ? u : u.userId));
+        setOnlineUsers(users);
       });
       
       newSocket.on('receive_message', (data) => {

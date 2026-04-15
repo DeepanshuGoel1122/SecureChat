@@ -42,6 +42,28 @@ function Dashboard() {
   };
 
   useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (deleteModal.open) {
+          setDeleteModal(prev => ({ ...prev, open: false }));
+        } else if (isChangePasswordOpen) {
+          setIsChangePasswordOpen(false);
+          setPasswordMessage({ text: '', type: '' });
+        } else if (isProfileMenuOpen) {
+          setIsProfileMenuOpen(false);
+        } else if (isSidebarOpen && window.innerWidth <= 768) {
+          setIsSidebarOpen(false);
+        } else if (removeConfirm.friendId || deleteConfirm.friendId) {
+          setRemoveConfirm({ friendId: null, step: 0 });
+          setDeleteConfirm({ friendId: null, step: 0 });
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [deleteModal.open, isChangePasswordOpen, isProfileMenuOpen, isSidebarOpen, removeConfirm, deleteConfirm]);
+
+  useEffect(() => {
     if (user) {
       if (user.role === 'admin') {
         navigate('/admin');
@@ -142,6 +164,9 @@ function Dashboard() {
   };
   const handleRejectRequest = async (requesterId) => {
     await executeAction('reject-request', { userId: user.id, requesterId });
+  };
+  const handleCancelRequest = async (receiverId) => {
+    await executeAction('cancel-request', { userId: user.id, receiverId });
   };
   const handleBlockUser = async (blockId) => {
     await executeAction('block-user', { userId: user.id, blockId });
@@ -439,7 +464,7 @@ function Dashboard() {
               return (
                 <div key={f._id} style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => navigate(`/chat/${f._id}`)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: onlineUsers.includes(f._id) ? 'var(--success)' : 'var(--text-secondary)', boxShadow: onlineUsers.includes(f._id) ? '0 0 5px var(--success)' : 'none' }}></div>
+                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)', boxShadow: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? '0 0 5px var(--success)' : 'none' }}></div>
                     <span style={{ fontWeight: '500' }}>{f.username}</span>
                     {unread > 0 && <span style={{ background: 'var(--danger)', color: 'white', border: '1px solid transparent', borderRadius: '12px', padding: '0.1rem 0.5rem', fontSize: '0.7rem', fontWeight: 'bold' }}>{unread}</span>}
                   </div>
@@ -540,7 +565,7 @@ function Dashboard() {
                       <div key={f._id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.includes(f._id) ? 'var(--success)' : 'var(--text-secondary)' }}></div>
+                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)' }}></div>
                               <span style={{ fontSize: '0.95rem' }}>{f.username}</span>
                            </div>
                            <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>Chat</button>
@@ -565,7 +590,10 @@ function Dashboard() {
                            <span style={{ fontSize: '0.9rem' }}>{s.username}</span>
                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending...</span>
                          </div>
-                         <button className="btn btn-secondary" style={{ padding: '0.3rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${s._id}`); }}>Message (10 Limit)</button>
+                         <div style={{ display: 'flex', gap: '0.5rem' }}>
+                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, color: '#ffb3b3', fontSize: '0.8rem' }} onClick={() => handleCancelRequest(s._id)}>Cancel</button>
+                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${s._id}`); }}>Message</button>
+                         </div>
                       </div>
                     ))}
                   </div>

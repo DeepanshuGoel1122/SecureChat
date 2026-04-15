@@ -29,6 +29,10 @@ function ChatRoom() {
   const [compressedFileSize, setCompressedFileSize] = useState(0);
   const [isCompressing, setIsCompressing] = useState(false);
 
+  const [allowMessageDelete, setAllowMessageDelete] = useState(false);
+  const [canDeleteMessages, setCanDeleteMessages] = useState(true);
+  const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -36,6 +40,31 @@ function ChatRoom() {
   const firstUnreadIdRef = useRef(null);
   const unreadDividerRef = useRef(null);
   const hasLoadedOnceRef = useRef(false);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (fullScreenImage) {
+          setFullScreenImage(null);
+        } else if (deleteConfirmMsg) {
+          setDeleteConfirmMsg(null);
+        } else if (activeMenuId) {
+          setActiveMenuId(null);
+        } else if (imagePreview) {
+          setImagePreview(null);
+          setSelectedImage(null);
+        } else if (replyingTo || editingMessage) {
+          setReplyingTo(null);
+          setEditingMessage(null);
+        } else {
+          // No modal/context open, go back to dashboard safely
+          navigate('/dashboard');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [fullScreenImage, deleteConfirmMsg, activeMenuId, imagePreview, replyingTo, editingMessage, navigate]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -91,8 +120,28 @@ function ChatRoom() {
     
     if (user?.id) {
       loadData();
+      // Fetch this specific user's delete permission
+      fetch(`${import.meta.env.VITE_API_URL}/api/users/user/${user.id}`)
+        .then(res => res.json())
+        .then(data => {
+           if (data && data.canDeleteMessages !== undefined) {
+             setCanDeleteMessages(data.canDeleteMessages);
+           }
+        })
+        .catch(() => {});
     }
   }, [user, friendId, socket]);
+
+  useEffect(() => {
+    if (user?.id && friendId) {
+      const draft = localStorage.getItem(`draft_${user.id}_${friendId}`);
+      if (draft) {
+        setInputMessage(draft);
+      } else {
+        setInputMessage('');
+      }
+    }
+  }, [user?.id, friendId]);
 
   useEffect(() => {
     if (!socket || !user?.id) return;
@@ -146,12 +195,18 @@ function ChatRoom() {
     socket.on('message_edited', handleEditReceive);
     socket.on('messages_read', handleMessagesRead);
     socket.on('chat_error', handleError);
+
+    const handleDeleteReceive = ({ messageId }) => {
+      setMessages((prev) => prev.filter(m => m._id !== messageId));
+    };
+    socket.on('message_deleted', handleDeleteReceive);
     
     return () => {
       socket.off('receive_message', handleReceive);
       socket.off('message_edited', handleEditReceive);
       socket.off('messages_read', handleMessagesRead);
       socket.off('chat_error', handleError);
+      socket.off('message_deleted', handleDeleteReceive);
     };
   }, [socket, user, friendId, userState]);
 
@@ -165,6 +220,16 @@ function ChatRoom() {
       }
     }, 150);
   }, [messages.length > 0 && messages[0]?._id]); 
+
+  useEffect(() => {
+    // Auto-focus input when chat loads and user has permission to type
+    if (!isLoadingChat && (userState === 'friend' || userState.includes('pending')) && inputRef.current) {
+      // Small timeout ensures the DOM node is fully painted if userState just changed
+      setTimeout(() => {
+        if (inputRef.current) inputRef.current.focus();
+      }, 50);
+    }
+  }, [isLoadingChat, userState, friendId]);
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 B';
@@ -389,6 +454,7 @@ function ChatRoom() {
     }
     
     setInputMessage('');
+    localStorage.removeItem(`draft_${user?.id}_${friendId}`);
     setSelectedImage(null);
     setImagePreview(null);
     // Clear unread divider after user sends a message
@@ -467,6 +533,17 @@ function ChatRoom() {
     inputRef.current?.focus();
   };
 
+  const handleDelete = (msg) => {
+    setDeleteConfirmMsg(msg);
+    setActiveMenuId(null);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteConfirmMsg || !socket) return;
+    socket.emit('delete_message', { messageId: deleteConfirmMsg._id, userId: user.id });
+    setDeleteConfirmMsg(null);
+  };
+
   const formatTime = (ts) => {
     if (!ts) return '';
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -515,7 +592,7 @@ function ChatRoom() {
     }
   };
 
-  const isOnline = onlineUsers.includes(friendId);
+  const isOnline = onlineUsers?.some(ou => (ou.userId || ou) === friendId);
 
   return (
     <div className="chat-container" onClick={() => setActiveMenuId(null)}>
@@ -537,6 +614,58 @@ function ChatRoom() {
       </div>
 
       {/* Fullscreen Image Overlay */}
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmMsg && (
+        <div 
+          onClick={() => setDeleteConfirmMsg(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{ 
+              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)', 
+              borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px', 
+              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center' 
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🗑️</div>
+            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)', fontSize: '1.1rem', fontWeight: '700' }}>Delete this message?</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: '1.4' }}>
+              This message will be permanently deleted for everyone in this chat.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <button 
+                onClick={confirmDelete}
+                style={{ 
+                  width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px', 
+                  background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white', 
+                  fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
+                  transition: 'transform 0.15s ease'
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                Delete for Everyone
+              </button>
+              <button 
+                onClick={() => setDeleteConfirmMsg(null)}
+                style={{ 
+                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)', 
+                  borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)', 
+                  fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'background 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {fullScreenImage && (
         <div 
           onClick={() => setFullScreenImage(null)}
@@ -655,6 +784,9 @@ function ChatRoom() {
                         <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Reply</button>
                         {isSelf && (
                           <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
+                        )}
+                        {canDeleteMessages !== false && isSelf && (
+                          <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: '#f85149', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
                         )}
                       </>
                     )}
@@ -826,7 +958,17 @@ function ChatRoom() {
                     className="input-field" 
                     placeholder={editingMessage ? "Edit your message..." : (userState.includes('pending') && sentCount >= 10 ? "Limit reached..." : "Type a message...")} 
                     value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInputMessage(val);
+                      if (!editingMessage) {
+                        if (val.trim() === '') {
+                          localStorage.removeItem(`draft_${user?.id}_${friendId}`);
+                        } else {
+                          localStorage.setItem(`draft_${user?.id}_${friendId}`, val);
+                        }
+                      }
+                    }}
                     onKeyDown={handleKeyDown}
                     style={{ 
                       marginBottom: 0, 

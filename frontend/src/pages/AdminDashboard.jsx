@@ -33,12 +33,42 @@ function AdminDashboard() {
   const [blacklistConfirm, setBlacklistConfirm] = useState(null);
   const [removingBlacklistId, setRemovingBlacklistId] = useState(null);
 
+  // Settings state
+  const [allowMessageDelete, setAllowMessageDelete] = useState(false);
+  const [togglingDelete, setTogglingDelete] = useState(false);
+  const [togglingUserDeleteId, setTogglingUserDeleteId] = useState(null);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showModal) {
+          setShowModal(false);
+          setResetMsg('');
+          setResetError('');
+        } else if (deleteConfirm) {
+          setDeleteConfirm(null);
+          setDeletePassInput('');
+          setDeletePassError('');
+        } else if (reactivateConfirm) {
+          setReactivateConfirm(null);
+        } else if (blacklistConfirm) {
+          setBlacklistConfirm(null);
+        } else if (activeTab !== 'active') {
+          setActiveTab('active');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [showModal, deleteConfirm, reactivateConfirm, blacklistConfirm, activeTab]);
+
   useEffect(() => {
     if (user?.role !== 'admin') {
       navigate('/dashboard');
       return;
     }
     fetchTopology();
+    fetchSettings();
   }, [user, navigate]);
 
   const fetchTopology = async () => {
@@ -49,6 +79,50 @@ function AdminDashboard() {
       setDeletedUsernames(data.deletedUsernames || []);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/settings`);
+      const data = await res.json();
+      setAllowMessageDelete(data.allowMessageDelete || false);
+    } catch (err) {
+      console.error('Error fetching settings:', err);
+    }
+  };
+
+  const handleToggleDelete = async () => {
+    setTogglingDelete(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/toggle-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowMessageDelete: !allowMessageDelete })
+      });
+      if (res.ok) {
+        setAllowMessageDelete(!allowMessageDelete);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingDelete(false);
+    }
+  };
+
+  const handleToggleUserDelete = async (targetUser) => {
+    setTogglingUserDeleteId(targetUser._id);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/toggle-user-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: targetUser._id, canDeleteMessages: !(targetUser.canDeleteMessages !== false) })
+      });
+      if (res.ok) fetchTopology();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingUserDeleteId(null);
     }
   };
 
@@ -256,6 +330,7 @@ function AdminDashboard() {
           { label: 'DISABLED', value: disabledUsers.length, color: '#666', tab: 'disabled', icon: '⛔' },
           { label: 'PENDING', value: pendingDeletions.length, color: '#ff9800', tab: 'pending', icon: '⚠️' },
           { label: 'BLACKLIST', value: deletedUsernames.length, color: '#cc0000', tab: 'blacklist', icon: '💀' },
+          { label: 'SETTINGS', value: '⚙️', color: '#58a6ff', tab: 'settings', icon: '⚙️', isIcon: true },
         ].map(stat => (
           <div
             key={stat.tab}
@@ -272,8 +347,8 @@ function AdminDashboard() {
             }}
           >
             <div style={{ fontSize: '1rem', marginBottom: '0.2rem' }}>{stat.icon}</div>
-            <div style={{ fontSize: '1.2rem', fontWeight: '900', color: stat.color, marginBottom: '0.1rem', lineHeight: 1 }}>{stat.value}</div>
-            <div style={{ color: activeTab === stat.tab ? 'white' : 'var(--text-secondary)', fontSize: '0.55rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{stat.label}</div>
+            {!stat.isIcon && <div style={{ fontSize: '1.2rem', fontWeight: '900', color: stat.color, marginBottom: '0.1rem', lineHeight: 1 }}>{stat.value}</div>}
+            <div style={{ color: activeTab === stat.tab ? 'white' : 'var(--text-secondary)', fontSize: stat.isIcon ? '0.65rem' : '0.55rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: stat.isIcon ? '0.1rem' : 0 }}>{stat.label}</div>
           </div>
         ))}
       </div>
@@ -343,7 +418,38 @@ function AdminDashboard() {
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end', alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    {/* Per-user delete toggle - always show for non-admins */}
+                    {u.role !== 'admin' && (
+                      <div 
+                        style={{ 
+                          display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          opacity: togglingUserDeleteId === u._id ? 0.5 : 1
+                        }}
+                        title={u.canDeleteMessages !== false ? 'Delete enabled for this user' : 'Delete disabled for this user'}
+                      >
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>🗑️ Del</span>
+                        <button
+                          onClick={() => handleToggleUserDelete(u)}
+                          disabled={togglingUserDeleteId === u._id}
+                          style={{
+                            position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
+                            background: u.canDeleteMessages !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            transition: 'background 0.3s ease', flexShrink: 0,
+                            boxShadow: u.canDeleteMessages !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
+                          }}
+                        >
+                          <div style={{
+                            position: 'absolute', top: '2px', left: u.canDeleteMessages !== false ? '18px' : '2px',
+                            width: '14px', height: '14px', borderRadius: '50%',
+                            background: 'white', transition: 'left 0.3s ease',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                          }}></div>
+                        </button>
+                      </div>
+                    )}
                     <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', color: 'yellow', fontWeight: 'bold' }} onClick={() => handleOpenReset(u)} disabled={isResetting || togglingId === u._id}>
                       RESET
                     </button>
@@ -514,6 +620,50 @@ function AdminDashboard() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ---- SETTINGS TAB ---- */}
+        {activeTab === 'settings' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+              Global settings that apply to all users in the system.
+            </div>
+
+            {/* Allow Message Delete Toggle */}
+            <div style={{ 
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid rgba(255,255,255,0.05)' 
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  🗑️ Allow Message Delete
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                  When enabled, users can delete their own messages for everyone. A "Delete" button appears in the message action menu.
+                </div>
+              </div>
+              <button
+                onClick={handleToggleDelete}
+                disabled={togglingDelete}
+                style={{
+                  position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                  background: allowMessageDelete ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  transition: 'background 0.3s ease', flexShrink: 0, marginLeft: '1rem',
+                  boxShadow: allowMessageDelete ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
+                  opacity: togglingDelete ? 0.5 : 1
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: '3px', left: allowMessageDelete ? '27px' : '3px',
+                  width: '22px', height: '22px', borderRadius: '50%',
+                  background: 'white', transition: 'left 0.3s ease',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.3)'
+                }}></div>
+              </button>
+            </div>
+
           </div>
         )}
 
