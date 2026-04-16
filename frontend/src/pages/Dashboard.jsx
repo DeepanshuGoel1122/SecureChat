@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
+import ProfileEditModal from '../components/ProfileEditModal';
+import UserProfileViewModal from '../components/UserProfileViewModal';
 
 function Dashboard() {
   const [friends, setFriends] = useState([]);
@@ -17,7 +19,6 @@ function Dashboard() {
   const [isFriendsLoading, setIsFriendsLoading] = useState(false);
   
   const [deleteConfirm, setDeleteConfirm] = useState({ friendId: null, step: 0 });
-  const [removeConfirm, setRemoveConfirm] = useState({ friendId: null, step: 0 });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -27,6 +28,21 @@ function Dashboard() {
   
   // Delete Account Modal state
   const [deleteModal, setDeleteModal] = useState({ open: false, step: 1, password: '', error: '', loading: false });
+
+  const [isProfileEditOpen, setIsProfileEditOpen] = useState(false);
+  const [viewedProfile, setViewedProfile] = useState(null);
+  
+  // Accordion state - track which sections are expanded
+  const [expandedSections, setExpandedSections] = useState({
+    friends: true,
+    incoming: true,
+    sent: false,
+    blocked: false
+  });
+
+  const toggleSection = (section) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
   
   const profileMenuRef = useRef(null);
   
@@ -51,17 +67,41 @@ function Dashboard() {
           setPasswordMessage({ text: '', type: '' });
         } else if (isProfileMenuOpen) {
           setIsProfileMenuOpen(false);
+        } else if (isProfileEditOpen) {
+          // If first setup, we might want to prevent closing, let's check
+          if (user?.isProfileSetup !== false || sessionStorage.getItem('skipProfileSetup')) {
+            setIsProfileEditOpen(false);
+          }
+        } else if (viewedProfile) {
+          setViewedProfile(null);
         } else if (isSidebarOpen && window.innerWidth <= 768) {
           setIsSidebarOpen(false);
-        } else if (removeConfirm.friendId || deleteConfirm.friendId) {
-          setRemoveConfirm({ friendId: null, step: 0 });
+        } else if (deleteConfirm.friendId) {
           setDeleteConfirm({ friendId: null, step: 0 });
         }
       }
     };
+    
+    // Click outside listener for profile menu
+    const handleClickOutside = (e) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) {
+        setIsProfileMenuOpen(false);
+        // Also close change password if it was open inside the menu
+        if (isChangePasswordOpen) {
+          setIsChangePasswordOpen(false);
+          setPasswordMessage({ text: '', type: '' });
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [deleteModal.open, isChangePasswordOpen, isProfileMenuOpen, isSidebarOpen, removeConfirm, deleteConfirm]);
+    document.addEventListener('mousedown', handleClickOutside);
+    
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [deleteModal.open, isChangePasswordOpen, isProfileMenuOpen, isSidebarOpen, deleteConfirm, isProfileEditOpen, viewedProfile, user]);
 
   useEffect(() => {
     if (user) {
@@ -76,6 +116,10 @@ function Dashboard() {
       }
       fetchFriends();
       fetchUnreadCounts();
+      
+      if (user.isProfileSetup === false && !sessionStorage.getItem('skipProfileSetup')) {
+        setIsProfileEditOpen(true);
+      }
     }
   }, [user, navigate]);
 
@@ -176,13 +220,9 @@ function Dashboard() {
   };
 
   const handleRemoveFriend = async (e, friendId) => {
-    e.stopPropagation(); 
-    if (removeConfirm.friendId !== friendId) return setRemoveConfirm({ friendId, step: 1 });
-    if (removeConfirm.step === 1) return setRemoveConfirm({ friendId, step: 2 });
-    if (removeConfirm.step === 2) {
-      await executeAction('remove-friend', { userId: user.id, friendId });
-      setRemoveConfirm({ friendId: null, step: 0 });
-    }
+    if (e?.stopPropagation) e.stopPropagation(); 
+    if (!window.confirm("Are you sure you want to remove this friend?")) return;
+    await executeAction('remove-friend', { userId: user.id, friendId });
   };
 
   const handleDeleteChat = async (e, friendId) => {
@@ -199,17 +239,7 @@ function Dashboard() {
     }
   };
 
-  const getRemoveText = (fId) => {
-    if (removeConfirm.friendId !== fId) return 'Remove Friend';
-    if (removeConfirm.step === 1) return 'Remove?';
-    if (removeConfirm.step === 2) return 'Sure?';
-  };
 
-  const getRemoveStyle = (fId) => {
-    if (removeConfirm.friendId !== fId) return { color: 'var(--danger)', textDecoration: 'underline' };
-    if (removeConfirm.step === 1) return { color: 'white' };
-    if (removeConfirm.step === 2) return { color: 'white', fontWeight: 'bold' };
-  };
   
   const handleToggleAutoLogout = async () => {
     // Treat undefined as true (default)
@@ -320,10 +350,10 @@ function Dashboard() {
               onClick={(e) => { e.stopPropagation(); setIsProfileMenuOpen(!isProfileMenuOpen); setIsChangePasswordOpen(false); setPasswordMessage({ text: '', type: '' }); }}
               style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', padding: '0.4rem 0.6rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', minWidth: 0 }}
             >
-              <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.75rem', color: 'white', flexShrink: 0 }}>
-                {user?.username?.charAt(0).toUpperCase()}
+              <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem', color: 'white', flexShrink: 0, overflow: 'hidden' }}>
+                {user?.profilePic ? <img src={user.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (user?.firstName ? user.firstName.charAt(0).toUpperCase() : user?.username?.charAt(0).toUpperCase())}
               </div>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.username}</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.firstName || user?.username}</span>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>▼</span>
             </div>
 
@@ -370,6 +400,15 @@ function Dashboard() {
                         }} />
                       </div>
                     </div>
+                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
+                    <button 
+                      style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      onClick={() => { setIsProfileEditOpen(true); setIsProfileMenuOpen(false); }}
+                    >
+                      <span style={{ fontSize: '0.75rem' }}>🧑‍🎓</span> Profile Settings
+                    </button>
                     <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
                     <button 
                       style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
@@ -461,12 +500,21 @@ function Dashboard() {
           ) : (
             activeChats.map(f => {
               const unread = unreadCounts[f._id] || 0;
+              const displayName = f.firstName || f.lastName ? `${f.firstName} ${f.lastName}` : f.username;
               return (
                 <div key={f._id} style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => navigate(`/chat/${f._id}`)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)', boxShadow: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? '0 0 5px var(--success)' : 'none' }}></div>
-                    <span style={{ fontWeight: '500' }}>{f.username}</span>
-                    {unread > 0 && <span style={{ background: 'var(--danger)', color: 'white', border: '1px solid transparent', borderRadius: '12px', padding: '0.1rem 0.5rem', fontSize: '0.7rem', fontWeight: 'bold' }}>{unread}</span>}
+                    <div style={{ position: 'relative' }}>
+                      <div style={{ width: '40px', height: '40px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
+                        {f.profilePic ? <img src={f.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (f.firstName ? f.firstName.charAt(0).toUpperCase() : f.username.charAt(0).toUpperCase())}
+                      </div>
+                      <div style={{ position: 'absolute', bottom: 0, right: 0, width: '12px', height: '12px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)', boxShadow: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? '0 0 5px var(--success)' : 'none', border: '2px solid rgba(13,17,23,0.95)' }}></div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                       <span style={{ fontWeight: '500' }}>{displayName}</span>
+                       <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>@{f.username}</span>
+                    </div>
+                    {unread > 0 && <span style={{ background: 'var(--danger)', color: 'white', border: '1px solid transparent', borderRadius: '12px', padding: '0.1rem 0.5rem', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '0.5rem' }}>{unread}</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <button className="btn" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: deleteConfirm.friendId === f._id && deleteConfirm.step === 2 ? 'red' : (deleteConfirm.friendId === f._id ? 'var(--danger)' : 'transparent'), color: deleteConfirm.friendId === f._id ? 'white' : 'var(--text-secondary)' }} onClick={(e) => handleDeleteChat(e, f._id)}>
@@ -517,103 +565,212 @@ function Dashboard() {
                   </div>
                 )}
                 {!isSearching && hasSearched && searchResults.length === 0 && <div style={{ padding: '0.75rem', color: 'var(--danger)', textAlign: 'center', background: 'rgba(255,0,0,0.1)', borderRadius: '8px', fontSize: '0.9rem' }}>User not found.</div>}
-                {!isSearching && searchResults.map(u => (
-                  <div key={u._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.95rem' }}>{u.username}</span>
-                    {friends.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>Added</span> : 
-                     sentRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending Req</span> :
-                     receivedRequests.some(f => f._id === u._id) ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>See Below</span> :
-                    <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }} onClick={() => handleSendRequest(u._id)}>Send Request</button>}
+                {!isSearching && searchResults.map(u => {
+                  let relation = 'none';
+                  if (friends.some(f => f._id === u._id)) relation = 'friend';
+                  else if (sentRequests.some(f => f._id === u._id)) relation = 'sent';
+                  else if (receivedRequests.some(f => f._id === u._id)) relation = 'received';
+                  
+                  return (
+                  <div key={u._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: u, relation })}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ width: '36px', height: '36px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                        {u.profilePic ? <img src={u.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (u.firstName ? u.firstName.charAt(0).toUpperCase() : u.username.charAt(0).toUpperCase())}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                         <span style={{ fontSize: '0.95rem' }}>{u.firstName || u.lastName ? `${u.firstName} ${u.lastName}` : u.username}</span>
+                         {u.firstName && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>@{u.username}</span>}
+                      </div>
+                    </div>
+                    {relation === 'friend' ? <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>Added</span> : 
+                     relation === 'sent' ? <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending Req</span> :
+                     relation === 'received' ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>See Below</span> :
+                    <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }} onClick={(e) => { e.stopPropagation(); handleSendRequest(u._id) }}>Send Request</button>}
                   </div>
-                ))}
+                )})}
               </div>
 
               <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', marginBottom: '1rem' }} />
 
-              {/* Incoming Requests */}
-              {receivedRequests.length > 0 && (
-                <>
-                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem', color: 'var(--accent)' }}>Incoming Requests</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                    {receivedRequests.map(r => (
-                      <div key={r._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                         <span style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>{r.username} wants to connect</span>
-                         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                           <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleAcceptRequest(r._id)}>Accept</button>
-                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleRejectRequest(r._id)}>Reject</button>
-                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, color: 'var(--danger)', fontSize: '0.75rem' }} onClick={() => handleBlockUser(r._id)}>Block</button>
-                         </div>
-                         <button className="btn btn-secondary" style={{ padding: '0.4rem', width: '100%', fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${r._id}`); }}>Message (10 Limit)</button>
-                      </div>
-                    ))}
+              {/* Accordion Container */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                
+                {/* Incoming Requests Section */}
+                <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', pb: '0.5rem' }}>
+                  <div 
+                    onClick={() => toggleSection('incoming')}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0.5rem', cursor: 'pointer', borderRadius: '8px', transition: 'background 0.2s', background: expandedSections.incoming ? 'rgba(88, 166, 255, 0.05)' : 'transparent' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expandedSections.incoming ? 'rotate(90deg)' : 'rotate(0deg)', opacity: 0.6 }}>▶</span>
+                      <h3 style={{ margin: 0, fontSize: '0.95rem', color: receivedRequests.length > 0 ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                        Incoming Requests
+                      </h3>
+                      {receivedRequests.length > 0 && (
+                        <span style={{ background: 'var(--accent)', color: 'white', fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px', minWidth: '18px', textAlign: 'center' }}>
+                          {receivedRequests.length}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </>
-              )}
+                  {expandedSections.incoming && (
+                    <div style={{ padding: '0.5rem 0 1rem 1.5rem', animation: 'fadeIn 0.2s' }}>
+                      {receivedRequests.length === 0 ? (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem' }}>No pending requests.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {receivedRequests.map(r => (
+                            <div key={r._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: r, relation: 'received' })}>
+                                 <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem', flexShrink: 0 }}>
+                                   {r.profilePic ? <img src={r.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (r.firstName ? r.firstName.charAt(0).toUpperCase() : r.username.charAt(0).toUpperCase())}
+                                 </div>
+                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                   <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>{r.firstName || r.lastName ? `${r.firstName} ${r.lastName}` : r.username}</span>
+                                 </div>
+                               </div>
+                               <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                 <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleAcceptRequest(r._id)}>Accept</button>
+                                 <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleRejectRequest(r._id)}>Reject</button>
+                               </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-              {/* Connected Friends */}
-              <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Active Friends</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', minHeight: '60px' }}>
-                 {isFriendsLoading ? (
-                   <div style={{ textAlign: 'center', padding: '1rem' }}>
-                     <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
-                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Loading friends...</div>
-                   </div>
-                 ) : friends.length === 0 ? (
-                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No active friends yet.</span>
-                 ) : (
-                   friends.map(f => (
-                      <div key={f._id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
-                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)' }}></div>
-                              <span style={{ fontSize: '0.95rem' }}>{f.username}</span>
-                           </div>
-                           <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>Chat</button>
-                         </div>
-                         <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '1rem', marginTop: '0.25rem' }}>
-                           <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, ...getRemoveStyle(f._id) }} onClick={(e) => handleRemoveFriend(e, f._id)}>{getRemoveText(f._id)}</button>
-                           <button className="btn btn-secondary" style={{ background: 'none', border: 'none', fontSize: '0.75rem', cursor: 'pointer', padding: 0, color: 'var(--danger)' }} onClick={() => handleBlockUser(f._id)}>Block User</button>
-                         </div>
-                      </div>
-                   ))
-                 )}
+                {/* Active Friends Section */}
+                <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', pb: '0.5rem' }}>
+                  <div 
+                    onClick={() => toggleSection('friends')}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0.5rem', cursor: 'pointer', borderRadius: '8px', transition: 'background 0.2s', background: expandedSections.friends ? 'rgba(88, 166, 255, 0.05)' : 'transparent' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expandedSections.friends ? 'rotate(90deg)' : 'rotate(0deg)', opacity: 0.6 }}>▶</span>
+                      <h3 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                        Active Friends
+                      </h3>
+                      <span style={{ background: 'rgba(255,255,255,0.1)', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px' }}>
+                        {friends.length}
+                      </span>
+                    </div>
+                  </div>
+                  {expandedSections.friends && (
+                    <div style={{ padding: '0.5rem 0 1rem 1.5rem' }}>
+                      {isFriendsLoading ? (
+                        <div style={{ textAlign: 'center', padding: '1rem' }}>
+                          <span className="spinner" style={{ borderTopColor: 'var(--accent)', width: '15px', height: '15px' }}></span>
+                        </div>
+                      ) : friends.length === 0 ? (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem' }}>No friends yet.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {friends.map(f => (
+                            <div key={f._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
+                                  <div style={{ position: 'relative' }}>
+                                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem' }}>
+                                      {f.profilePic ? <img src={f.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (f.firstName ? f.firstName.charAt(0).toUpperCase() : f.username.charAt(0).toUpperCase())}
+                                    </div>
+                                    <div style={{ position: 'absolute', bottom: 0, right: 0, width: '8px', height: '8px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)', border: '1.5px solid rgba(13,17,23,0.95)' }}></div>
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>{f.firstName || f.lastName ? `${f.firstName} ${f.lastName}` : f.username}</span>
+                                  </div>
+                               </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Sent Requests Section */}
+                <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', pb: '0.5rem' }}>
+                  <div 
+                    onClick={() => toggleSection('sent')}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0.5rem', cursor: 'pointer', borderRadius: '8px', transition: 'background 0.2s', background: expandedSections.sent ? 'rgba(88, 166, 255, 0.05)' : 'transparent' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expandedSections.sent ? 'rotate(90deg)' : 'rotate(0deg)', opacity: 0.6 }}>▶</span>
+                      <h3 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
+                        Sent Requests
+                      </h3>
+                      {sentRequests.length > 0 && (
+                        <span style={{ background: 'rgba(255,255,255,0.1)', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px' }}>
+                          {sentRequests.length}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {expandedSections.sent && (
+                    <div style={{ padding: '0.5rem 0 1rem 1.5rem' }}>
+                      {sentRequests.length === 0 ? (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem' }}>No sent requests.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {sentRequests.map(s => (
+                            <div key={s._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: s, relation: 'sent' })}>
+                                 <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
+                                   {s.profilePic ? <img src={s.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (s.firstName ? s.firstName.charAt(0).toUpperCase() : s.username.charAt(0).toUpperCase())}
+                                 </div>
+                                 <span style={{ fontSize: '0.85rem' }}>{s.firstName || s.lastName ? `${s.firstName} ${s.lastName}` : s.username}</span>
+                               </div>
+                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: '#ffb3b3' }} onClick={() => handleCancelRequest(s._id)}>Cancel</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Blocked Users Section */}
+                <div>
+                  <div 
+                    onClick={() => toggleSection('blocked')}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0.5rem', cursor: 'pointer', borderRadius: '8px', transition: 'background 0.2s', background: expandedSections.blocked ? 'rgba(248, 81, 73, 0.05)' : 'transparent' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expandedSections.blocked ? 'rotate(90deg)' : 'rotate(0deg)', opacity: 0.6 }}>▶</span>
+                      <h3 style={{ margin: 0, fontSize: '0.95rem', color: blockedUsers.length > 0 ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                        Blocked Users
+                      </h3>
+                      {blockedUsers.length > 0 && (
+                        <span style={{ background: 'rgba(248, 81, 73, 0.15)', color: 'var(--danger)', fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px' }}>
+                          {blockedUsers.length}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {expandedSections.blocked && (
+                    <div style={{ padding: '0.5rem 0 1rem 1.5rem' }}>
+                      {blockedUsers.length === 0 ? (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem' }}>No blocked users.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {blockedUsers.map(b => (
+                            <div key={b._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,0,0,0.05)', borderRadius: '8px', border: '1px solid rgba(255,0,0,0.1)' }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                 <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
+                                   {b.profilePic ? <img src={b.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (b.firstName ? b.firstName.charAt(0).toUpperCase() : b.username.charAt(0).toUpperCase())}
+                                 </div>
+                                 <span style={{ fontSize: '0.85rem', color: '#ffb3b3' }}>{b.firstName || b.lastName ? `${b.firstName} ${b.lastName}` : b.username}</span>
+                               </div>
+                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }} onClick={() => handleUnblockUser(b._id)}>Unblock</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
               </div>
-
-              {/* Waiting Requests */}
-              {sentRequests.length > 0 && (
-                <>
-                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Sent Requests (Pending)</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', opacity: 0.9 }}>
-                    {sentRequests.map(s => (
-                      <div key={s._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
-                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                           <span style={{ fontSize: '0.9rem' }}>{s.username}</span>
-                           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending...</span>
-                         </div>
-                         <div style={{ display: 'flex', gap: '0.5rem' }}>
-                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, color: '#ffb3b3', fontSize: '0.8rem' }} onClick={() => handleCancelRequest(s._id)}>Cancel</button>
-                           <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.8rem' }} onClick={() => { setIsSidebarOpen(false); navigate(`/chat/${s._id}`); }}>Message</button>
-                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Blocked Users */}
-              {blockedUsers.length > 0 && (
-                <>
-                  <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--danger)' }}>Blocked Users</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', border: '1px solid rgba(255,0,0,0.2)', padding: '0.5rem', borderRadius: '8px' }}>
-                    {blockedUsers.map(b => (
-                      <div key={b._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,0,0,0.1)', borderRadius: '8px' }}>
-                         <span style={{ fontSize: '0.9rem', color: '#ffb3b3' }}>{b.username}</span>
-                         <button className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }} onClick={() => handleUnblockUser(b._id)}>Unblock</button>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -681,6 +838,21 @@ function Dashboard() {
           </div>
         </div>
       )}
+      {/* Modals */}
+      <ProfileEditModal 
+        isOpen={isProfileEditOpen} 
+        onClose={() => setIsProfileEditOpen(false)} 
+        isFirstSetup={user?.isProfileSetup === false && !sessionStorage.getItem('skipProfileSetup')} 
+      />
+      <UserProfileViewModal
+        isOpen={!!viewedProfile}
+        onClose={() => setViewedProfile(null)}
+        profileUser={viewedProfile?.user}
+        relationState={viewedProfile?.relation}
+        onSendRequest={handleSendRequest}
+        onBlockUser={handleBlockUser}
+        onRemoveFriend={handleRemoveFriend}
+      />
     </div>
   );
 }

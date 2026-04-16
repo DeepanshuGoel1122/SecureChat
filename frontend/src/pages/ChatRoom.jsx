@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
+import UserProfileViewModal from '../components/UserProfileViewModal';
 
 function ChatRoom() {
   const { friendId } = useParams(); 
@@ -32,6 +33,7 @@ function ChatRoom() {
   const [allowMessageDelete, setAllowMessageDelete] = useState(false);
   const [canDeleteMessages, setCanDeleteMessages] = useState(true);
   const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null);
+  const [isViewProfileOpen, setIsViewProfileOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -44,7 +46,9 @@ function ChatRoom() {
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (fullScreenImage) {
+        if (isViewProfileOpen) {
+          setIsViewProfileOpen(false);
+        } else if (fullScreenImage) {
           setFullScreenImage(null);
         } else if (deleteConfirmMsg) {
           setDeleteConfirmMsg(null);
@@ -56,6 +60,8 @@ function ChatRoom() {
         } else if (replyingTo || editingMessage) {
           setReplyingTo(null);
           setEditingMessage(null);
+          // Only clear input if we were editing (not replying) to avoid losing draft
+          if (editingMessage) setInputMessage('');
         } else {
           // No modal/context open, go back to dashboard safely
           navigate('/dashboard');
@@ -64,7 +70,7 @@ function ChatRoom() {
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [fullScreenImage, deleteConfirmMsg, activeMenuId, imagePreview, replyingTo, editingMessage, navigate]);
+  }, [isViewProfileOpen, fullScreenImage, deleteConfirmMsg, activeMenuId, imagePreview, replyingTo, editingMessage, navigate]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -132,6 +138,8 @@ function ChatRoom() {
     }
   }, [user, friendId, socket]);
 
+
+
   useEffect(() => {
     if (user?.id && friendId) {
       const draft = localStorage.getItem(`draft_${user.id}_${friendId}`);
@@ -142,6 +150,47 @@ function ChatRoom() {
       }
     }
   }, [user?.id, friendId]);
+
+  const handleBlockUser = async (targetId) => {
+    if (!window.confirm("Are you sure you want to block this user?")) return;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/block`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, targetId })
+      });
+      if (res.ok) {
+        setUserState('blocked');
+      } else {
+        const data = await res.json();
+        alert(data.message || 'Failed to block user');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error while blocking user');
+    }
+  };
+
+  const handleRemoveFriend = async (e, friendId) => {
+    if (e?.stopPropagation) e.stopPropagation(); 
+    if (!window.confirm("Are you sure you want to remove this friend?")) return;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/remove-friend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, friendId })
+      });
+      if (res.ok) {
+        setUserState('none');
+      } else {
+        const data = await res.json();
+        alert(data.message || 'Failed to remove friend');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error');
+    }
+  };
 
   useEffect(() => {
     if (!socket || !user?.id) return;
@@ -598,15 +647,26 @@ function ChatRoom() {
     <div className="chat-container" onClick={() => setActiveMenuId(null)}>
       <div className="glass-panel chat-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(13,17,23,0.97)' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
-          <div style={{ 
-            width: '12px', height: '12px', borderRadius: '50%', flexShrink: 0,
-            background: isOnline ? 'var(--success)' : 'var(--text-secondary)',
-            boxShadow: isOnline ? '0 0 5px var(--success)' : 'none'
-          }}></div>
-          <div style={{ minWidth: 0 }}>
-            <h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 'clamp(0.95rem, 4vw, 1.25rem)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Chat with {friendDetails ? friendDetails.username : '...'}</h2>
+          <div style={{ position: 'relative' }}>
+            <div 
+              style={{ width: '40px', height: '40px', borderRadius: '50%', flexShrink: 0, overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.2rem', cursor: 'pointer' }}
+              onClick={() => setIsViewProfileOpen(true)}
+            >
+              {friendDetails?.profilePic ? <img src={friendDetails.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (friendDetails?.firstName ? friendDetails.firstName.charAt(0).toUpperCase() : friendDetails?.username?.charAt(0).toUpperCase())}
+            </div>
+            <div style={{ 
+              position: 'absolute', bottom: 0, right: 0, width: '12px', height: '12px', borderRadius: '50%',
+              background: isOnline ? 'var(--success)' : 'var(--text-secondary)',
+              boxShadow: isOnline ? '0 0 5px var(--success)' : 'none',
+              border: '2px solid rgba(13,17,23,0.95)'
+            }}></div>
+          </div>
+          <div style={{ minWidth: 0, cursor: 'pointer' }} onClick={() => setIsViewProfileOpen(true)}>
+            <h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 'clamp(0.95rem, 4vw, 1.25rem)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {friendDetails?.firstName || friendDetails?.lastName ? `${friendDetails.firstName} ${friendDetails.lastName}` : friendDetails?.username}
+            </h2>
             <span style={{ fontSize: '0.8rem', color: isOnline ? 'var(--success)' : 'var(--text-secondary)' }}>
-              {isOnline ? 'Online & Secure' : 'Offline'}
+              {isOnline ? 'Online & Secure' : 'Offline'} • @{friendDetails?.username}
             </span>
           </div>
         </div>
@@ -614,6 +674,15 @@ function ChatRoom() {
       </div>
 
       {/* Fullscreen Image Overlay */}
+      {/* View Profile Modal */}
+      <UserProfileViewModal
+        isOpen={isViewProfileOpen}
+        onClose={() => setIsViewProfileOpen(false)}
+        profileUser={friendDetails}
+        relationState={userState}
+        onBlockUser={handleBlockUser}
+        onRemoveFriend={handleRemoveFriend}
+      />
       {/* Delete Confirmation Modal */}
       {deleteConfirmMsg && (
         <div 
@@ -854,11 +923,11 @@ function ChatRoom() {
         <div style={{ borderTop: '1px solid var(--glass-border)', background: 'var(--panel-bg)', minHeight: '60px', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
           {userState === 'blocked' ? (
             <div style={{ color: '#ffb3b3', fontStyle: 'italic', fontSize: '0.9rem', width: '100%', textAlign: 'center', padding: '1rem', background: 'rgba(255,0,0,0.1)' }}>
-              Messaging blocked.
+              You cannot reply to this conversation.
             </div>
           ) : userState === 'none' ? (
              <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.9rem', width: '100%', textAlign: 'center', padding: '1rem' }}>
-              You are no longer friends.
+              You cannot reply to this conversation.
              </div>
           ) : (
              <div style={{ width: '100%' }}>
