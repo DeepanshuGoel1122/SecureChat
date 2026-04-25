@@ -19,6 +19,8 @@ function Dashboard() {
   const [isFriendsLoading, setIsFriendsLoading] = useState(false);
   
   const [deleteConfirm, setDeleteConfirm] = useState({ friendId: null, step: 0 });
+  const [blockConfirm, setBlockConfirm] = useState(null);
+  const [removeConfirm, setRemoveConfirm] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -213,18 +215,30 @@ function Dashboard() {
     await executeAction('cancel-request', { userId: user.id, receiverId });
   };
   const handleBlockUser = async (blockId) => {
-    await executeAction('block-user', { userId: user.id, blockId });
+    setBlockConfirm(blockId);
   };
+
+  const confirmBlockUser = async () => {
+    if (!blockConfirm) return;
+    await executeAction('block-user', { userId: user.id, blockId: blockConfirm });
+    setBlockConfirm(null);
+  };
+
   const handleUnblockUser = async (blockId) => {
     await executeAction('unblock-user', { userId: user.id, blockId });
+    if (socket) socket.emit('user_unblocked', { userId: user.id, unblockedId: blockId });
   };
 
   const handleRemoveFriend = async (e, friendId) => {
-    if (e?.stopPropagation) e.stopPropagation(); 
-    if (!window.confirm("Are you sure you want to remove this friend?")) return;
-    await executeAction('remove-friend', { userId: user.id, friendId });
+    if (e?.stopPropagation) e.stopPropagation();
+    setRemoveConfirm(friendId);
   };
 
+  const confirmRemoveFriend = async () => {
+    if (!removeConfirm) return;
+    await executeAction('remove-friend', { userId: user.id, friendId: removeConfirm });
+    setRemoveConfirm(null);
+  };
   const handleDeleteChat = async (e, friendId) => {
     e.stopPropagation(); 
     if (deleteConfirm.friendId !== friendId) return setDeleteConfirm({ friendId, step: 1 });
@@ -323,7 +337,7 @@ function Dashboard() {
   };
 
   return (
-    <div className="dashboard-container" onClick={() => { setDeleteConfirm({ friendId: null, step: 0 }); setRemoveConfirm({ friendId: null, step: 0 }); setIsProfileMenuOpen(false); }}>
+    <div className="dashboard-container" onClick={() => { setDeleteConfirm({ friendId: null, step: 0 }); setRemoveConfirm(null); setIsProfileMenuOpen(false); }}>
       
       {/* Sticky header */}
       <div style={{
@@ -776,6 +790,110 @@ function Dashboard() {
         </div>
       )}
 
+      {/* Block Confirmation Modal */}
+      {blockConfirm && (
+        <div
+          onClick={() => setBlockConfirm(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🚫</div>
+            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)', fontSize: '1.1rem', fontWeight: '700' }}>Block this user?</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: '1.4' }}>
+              They will no longer be able to send you messages or see your profile.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <button
+                onClick={confirmBlockUser}
+                style={{
+                  width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
+                  fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
+                  transition: 'transform 0.15s ease'
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                Block User
+              </button>
+              <button
+                onClick={() => setBlockConfirm(null)}
+                style={{
+                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
+                  fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'background 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Friend Confirmation Modal */}
+      {removeConfirm && (
+        <div
+          onClick={() => setRemoveConfirm(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>❌</div>
+            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)', fontSize: '1.1rem', fontWeight: '700' }}>Remove this friend?</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: '1.4' }}>
+              Are you sure you want to remove this user from your friends list?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <button
+                onClick={confirmRemoveFriend}
+                style={{
+                  width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
+                  fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
+                  transition: 'transform 0.15s ease'
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                Remove Friend
+              </button>
+              <button
+                onClick={() => setRemoveConfirm(null)}
+                style={{
+                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
+                  fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'background 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Account Modal */}
       {deleteModal.open && (
         <div 
@@ -851,6 +969,7 @@ function Dashboard() {
         relationState={viewedProfile?.relation}
         onSendRequest={handleSendRequest}
         onBlockUser={handleBlockUser}
+        onUnblockUser={handleUnblockUser}
         onRemoveFriend={handleRemoveFriend}
       />
     </div>

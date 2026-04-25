@@ -10,13 +10,24 @@ router.get('/search', async (req, res) => {
     const { q, userId } = req.query;
     if (!q) return res.json([]);
     
-    let users = await User.find({ username: { $regex: q, $options: 'i' } })
-                            .select('_id username blockedUsers');
+    const reqUser = await User.findById(userId).select('blockedUsers');
     
-    // Ignore self and users who blocked us
-    users = users.filter(u => u._id.toString() !== userId && !u.blockedUsers.includes(userId));
+    let users = await User.find({
+      $or: [
+        { username: { $regex: q, $options: 'i' } },
+        { firstName: { $regex: q, $options: 'i' } },
+        { lastName: { $regex: q, $options: 'i' } }
+      ]
+    }).select('_id username firstName lastName profilePic bio blockedUsers');
     
-    const safeUsers = users.map(u => ({ _id: u._id, username: u.username }));
+    // Ignore self, users who blocked us, and users we blocked
+    users = users.filter(u => 
+      u._id.toString() !== userId && 
+      !u.blockedUsers.includes(userId) && 
+      !reqUser.blockedUsers.includes(u._id.toString())
+    );
+    
+    const safeUsers = users.map(u => ({ _id: u._id, username: u.username, firstName: u.firstName, lastName: u.lastName, profilePic: u.profilePic, bio: u.bio }));
     res.json(safeUsers);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -140,7 +151,13 @@ router.post('/block-user', async (req, res) => {
 router.post('/unblock-user', async (req, res) => {
   try {
     const { userId, blockId } = req.body;
-    await User.findByIdAndUpdate(userId, { $pull: { blockedUsers: blockId } });
+    await User.findByIdAndUpdate(userId, { 
+      $pull: { blockedUsers: blockId },
+      $addToSet: { friends: blockId }
+    });
+    await User.findByIdAndUpdate(blockId, {
+      $addToSet: { friends: userId }
+    });
     res.json({ message: 'User unblocked' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -150,7 +167,7 @@ router.post('/unblock-user', async (req, res) => {
 // Get user profile explicitly
 router.get('/user/:id', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('_id username canDeleteMessages');
+    const user = await User.findById(req.params.id).select('_id username firstName lastName profilePic bio canDeleteMessages deleteManuallyDisabled canMediaSharing mediaSharingManuallyDisabled canUploadFiles canRestrictedFileUpload canUnrestrictedFileUpload unrestrictedFileSharingManuallyDisabled maxFileSize allowedFileTypes');
     res.json(user);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -162,14 +179,14 @@ router.get('/friends/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
     const user = await User.findById(userId)
-      .populate('friends', '_id username')
-      .populate('sentRequests', '_id username')
-      .populate('receivedRequests', '_id username')
-      .populate('blockedUsers', '_id username');
+      .populate('friends', '_id username firstName lastName profilePic bio')
+      .populate('sentRequests', '_id username firstName lastName profilePic bio')
+      .populate('receivedRequests', '_id username firstName lastName profilePic bio')
+      .populate('blockedUsers', '_id username firstName lastName profilePic bio');
     
     const messages = await Message.find({
       $or: [{ sender: userId }, { receiver: userId }]
-    }).populate('sender', '_id username').populate('receiver', '_id username');
+    }).populate('sender', '_id username firstName lastName profilePic bio').populate('receiver', '_id username firstName lastName profilePic bio');
     
     const partnerMap = new Map();
     messages.forEach(msg => {
@@ -178,11 +195,10 @@ router.get('/friends/:userId', async (req, res) => {
       if (!partner) return;
       const pId = partner._id.toString();
       
-      // Filter out mapped activities if they are blocked
-      if (user.blockedUsers.some(b => b._id.toString() === pId)) return;
+      
 
       if (!partnerMap.has(pId)) {
-        partnerMap.set(pId, { _id: partner._id, username: partner.username, latestMsg: msg });
+        partnerMap.set(pId, { _id: partner._id, username: partner.username, firstName: partner.firstName, lastName: partner.lastName, profilePic: partner.profilePic, bio: partner.bio, latestMsg: msg });
       } else {
         if (new Date(msg.createdAt) > new Date(partnerMap.get(pId).latestMsg.createdAt)) {
           partnerMap.get(pId).latestMsg = msg;
@@ -197,16 +213,20 @@ router.get('/friends/:userId', async (req, res) => {
         activeChats.push({
           _id: partner._id,
           username: partner.username,
+          firstName: partner.firstName,
+          lastName: partner.lastName,
+          profilePic: partner.profilePic,
+          bio: partner.bio,
           hasActiveChat: true,
           latestMessageAt: partner.latestMsg.createdAt
         });
       }
     });
 
-    const allFriends = user.friends.map(f => ({ _id: f._id, username: f.username }));
-    const sentReq = user.sentRequests.map(f => ({ _id: f._id, username: f.username }));
-    const recvReq = user.receivedRequests.map(f => ({ _id: f._id, username: f.username }));
-    const blocked = user.blockedUsers.map(f => ({ _id: f._id, username: f.username }));
+    const allFriends = user.friends.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
+    const sentReq = user.sentRequests.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
+    const recvReq = user.receivedRequests.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
+    const blocked = user.blockedUsers.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
 
     activeChats.sort((a, b) => new Date(b.latestMessageAt) - new Date(a.latestMessageAt));
 
@@ -257,6 +277,27 @@ router.post('/unsubscribe', async (req, res) => {
     const { userId } = req.body;
     await User.findByIdAndUpdate(userId, { pushSubscription: null });
     res.json({ message: 'Unsubscribed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update Profile
+router.post('/profile-update', async (req, res) => {
+  try {
+    const { userId, firstName, lastName, profilePic, bio } = req.body;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    
+    if (firstName !== undefined) user.firstName = firstName;
+    if (lastName !== undefined) user.lastName = lastName;
+    if (profilePic !== undefined) user.profilePic = profilePic;
+    if (bio !== undefined) user.bio = bio;
+    
+    user.isProfileSetup = true;
+    
+    await user.save();
+    res.json({ message: 'Profile updated successfully', user: { ...user.toObject(), password: '' } });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }

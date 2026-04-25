@@ -35,8 +35,18 @@ function AdminDashboard() {
 
   // Settings state
   const [allowMessageDelete, setAllowMessageDelete] = useState(false);
+  const [allowMediaSharing, setAllowMediaSharing] = useState(false);
   const [togglingDelete, setTogglingDelete] = useState(false);
   const [togglingUserDeleteId, setTogglingUserDeleteId] = useState(null);
+
+  // File upload settings state
+  const [allowFileUpload, setAllowFileUpload] = useState(false);
+  const [allowRestrictedFileUpload, setAllowRestrictedFileUpload] = useState(false);
+  const [allowUnrestrictedFileUpload, setAllowUnrestrictedFileUpload] = useState(false);
+  const [maxFileSize, setMaxFileSize] = useState(25);
+  const [togglingFileUpload, setTogglingFileUpload] = useState(false);
+  const [savingFileSize, setSavingFileSize] = useState(false);
+  const [togglingUserFileId, setTogglingUserFileId] = useState(null);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
@@ -87,8 +97,25 @@ function AdminDashboard() {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/settings`);
       const data = await res.json();
       setAllowMessageDelete(data.allowMessageDelete || false);
+      setAllowMediaSharing(data.allowMediaSharing || false);
+      setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload || false);
     } catch (err) {
       console.error('Error fetching settings:', err);
+    }
+
+    // Fetch file upload settings
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/file-settings`);
+      if (res.ok) {
+        const data = await res.json();
+        setAllowFileUpload(data.allowFileUpload || false);
+        setAllowMediaSharing(data.allowMediaSharing ?? data.allowFileUpload ?? false);
+        setAllowRestrictedFileUpload(data.allowRestrictedFileUpload ?? data.allowFileUpload ?? false);
+        setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload || false);
+        setMaxFileSize(data.maxFileSize || 25);
+      }
+    } catch (err) {
+      console.error('Error fetching file settings:', err);
     }
   };
 
@@ -110,6 +137,15 @@ function AdminDashboard() {
     }
   };
 
+  const handleResetDeleteOverrides = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/reset-delete-overrides`, { method: 'POST' });
+      if (res.ok) fetchTopology();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleToggleUserDelete = async (targetUser) => {
     setTogglingUserDeleteId(targetUser._id);
     try {
@@ -123,6 +159,149 @@ function AdminDashboard() {
       console.error(err);
     } finally {
       setTogglingUserDeleteId(null);
+    }
+  };
+
+  // File upload handlers
+  const handleToggleMediaSharing = async () => {
+    setTogglingFileUpload(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/toggle-media-sharing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowMediaSharing: !allowMediaSharing })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllowMediaSharing(data.allowMediaSharing || false);
+        setAllowFileUpload(data.allowFileUpload || false);
+        setAllowRestrictedFileUpload(data.allowRestrictedFileUpload || false);
+        fetchTopology();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingFileUpload(false);
+    }
+  };
+
+  const handleResetMediaOverrides = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/reset-media-sharing-overrides`, { method: 'POST' });
+      if (res.ok) fetchTopology();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleToggleFileUpload = async (mode) => {
+    const nextValue = mode === 'unrestricted' ? !allowUnrestrictedFileUpload : !allowRestrictedFileUpload;
+    setTogglingFileUpload(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/toggle-file-upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowFileUpload: nextValue, mode })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllowFileUpload(data.allowFileUpload || false);
+        setAllowMediaSharing(data.allowMediaSharing ?? data.allowFileUpload ?? false);
+        setAllowRestrictedFileUpload(data.allowRestrictedFileUpload ?? data.allowFileUpload ?? false);
+        setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload || false);
+        fetchTopology();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingFileUpload(false);
+    }
+  };
+
+  const handleSetMaxFileSize = async () => {
+    if (maxFileSize < 25 || maxFileSize > 300) {
+      alert('File size must be between 25MB and 300MB');
+      return;
+    }
+    setSavingFileSize(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/set-max-file-size`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxFileSize })
+      });
+      if (res.ok) {
+        alert('File size limit updated successfully');
+      } else {
+        alert('Failed to update file size limit');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error updating file size limit');
+    } finally {
+      setSavingFileSize(false);
+    }
+  };
+
+  const handleBulkUpdateDelete = async (enable) => {
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/admin/reset-delete-overrides`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setAll: enable })
+      });
+      fetchTopology();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleBulkUpdateMedia = async (enable) => {
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/admin/reset-media-sharing-overrides`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setAll: enable })
+      });
+      fetchTopology();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleBulkUpdateUnrestricted = async (enable) => {
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/api/admin/reset-unrestricted-file-overrides`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setAll: enable })
+      });
+      fetchTopology();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleToggleUserFileUpload = async (targetUser, mode) => {
+    const currentValue = mode === 'unrestricted'
+      ? targetUser.canUnrestrictedFileUpload === true
+      : (targetUser.canMediaSharing ?? targetUser.canRestrictedFileUpload ?? targetUser.canUploadFiles) !== false;
+    setTogglingUserFileId(targetUser._id);
+    try {
+      const endpoint = mode === 'unrestricted' ? 'toggle-user-file-upload' : 'toggle-user-media-sharing';
+      const payload = mode === 'unrestricted'
+        ? { userId: targetUser._id, canUploadFiles: !currentValue, mode }
+        : { userId: targetUser._id, canMediaSharing: !currentValue };
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) fetchTopology();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingUserFileId(null);
     }
   };
 
@@ -272,6 +451,7 @@ function AdminDashboard() {
     });
   };
 
+  const anyFileUploadEnabled = allowFileUpload || allowRestrictedFileUpload || allowUnrestrictedFileUpload;
 
 
   return (
@@ -426,23 +606,26 @@ function AdminDashboard() {
                           display: 'flex', alignItems: 'center', gap: '0.4rem',
                           background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
                           border: '1px solid rgba(255,255,255,0.06)',
-                          opacity: togglingUserDeleteId === u._id ? 0.5 : 1
+                          opacity: !allowMessageDelete ? 0.35 : (togglingUserDeleteId === u._id ? 0.5 : 1),
+                          transition: 'opacity 0.2s ease',
+                          pointerEvents: !allowMessageDelete ? 'none' : 'auto',
+                          filter: !allowMessageDelete ? 'grayscale(1)' : 'none'
                         }}
-                        title={u.canDeleteMessages !== false ? 'Delete enabled for this user' : 'Delete disabled for this user'}
+                        title={!allowMessageDelete ? 'Enable global delete first' : (u.canDeleteMessages !== false ? 'Delete enabled for this user' : 'Delete disabled for this user')}
                       >
                         <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>🗑️ Del</span>
                         <button
                           onClick={() => handleToggleUserDelete(u)}
-                          disabled={togglingUserDeleteId === u._id}
+                          disabled={togglingUserDeleteId === u._id || !allowMessageDelete}
                           style={{
                             position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
-                            background: u.canDeleteMessages !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            background: allowMessageDelete && u.canDeleteMessages !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
                             transition: 'background 0.3s ease', flexShrink: 0,
-                            boxShadow: u.canDeleteMessages !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
+                            boxShadow: allowMessageDelete && u.canDeleteMessages !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
                           }}
                         >
                           <div style={{
-                            position: 'absolute', top: '2px', left: u.canDeleteMessages !== false ? '18px' : '2px',
+                            position: 'absolute', top: '2px', left: allowMessageDelete && u.canDeleteMessages !== false ? '18px' : '2px',
                             width: '14px', height: '14px', borderRadius: '50%',
                             background: 'white', transition: 'left 0.3s ease',
                             boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
@@ -450,6 +633,82 @@ function AdminDashboard() {
                         </button>
                       </div>
                     )}
+
+                    {/* Per-user file upload toggle */}
+                    {u.role !== 'admin' && (
+                      <div 
+                        style={{ 
+                          display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          opacity: !allowMediaSharing ? 0.35 : (togglingUserFileId === u._id ? 0.5 : 1),
+                          transition: 'opacity 0.2s ease',
+                          pointerEvents: !allowMediaSharing ? 'none' : 'auto',
+                          filter: !allowMediaSharing ? 'grayscale(1)' : 'none'
+                        }}
+                        title={!allowMediaSharing ? 'Enable global image and file sharing first' : ((u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? 'Image and file sharing enabled for this user' : 'Image and file sharing disabled for this user')}
+                      >
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                          </svg> Upload
+                        </span>
+                        <button
+                          onClick={() => handleToggleUserFileUpload(u, 'restricted')}
+                          disabled={togglingUserFileId === u._id || !allowMediaSharing}
+                          style={{
+                            position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
+                            background: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            transition: 'background 0.3s ease', flexShrink: 0,
+                            boxShadow: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
+                          }}
+                        >
+                          <div style={{
+                            position: 'absolute', top: '2px', left: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? '18px' : '2px',
+                            width: '14px', height: '14px', borderRadius: '50%',
+                            background: 'white', transition: 'left 0.3s ease',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                          }}></div>
+                        </button>
+                      </div>
+                    )}
+
+                    {u.role !== 'admin' && (
+                      <div
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          opacity: (!allowMediaSharing || !allowUnrestrictedFileUpload) ? 0.35 : (togglingUserFileId === u._id ? 0.5 : 1),
+                          transition: 'opacity 0.2s ease',
+                          pointerEvents: (!allowMediaSharing || !allowUnrestrictedFileUpload) ? 'none' : 'auto',
+                          filter: (!allowMediaSharing || !allowUnrestrictedFileUpload) ? 'grayscale(1)' : 'none'
+                        }}
+                        title={!allowMediaSharing || !allowUnrestrictedFileUpload ? 'Enable both global sharing settings first' : (u.canUnrestrictedFileUpload === true ? 'Unrestricted upload enabled for this user' : 'Unrestricted upload disabled for this user')}
+                      >
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>Open Upload</span>
+                        <button
+                          onClick={() => handleToggleUserFileUpload(u, 'unrestricted')}
+                          disabled={togglingUserFileId === u._id || !allowMediaSharing || !allowUnrestrictedFileUpload}
+                          style={{
+                            position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
+                            background: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            transition: 'background 0.3s ease', flexShrink: 0,
+                            boxShadow: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
+                          }}
+                        >
+                          <div style={{
+                            position: 'absolute', top: '2px', left: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? '18px' : '2px',
+                            width: '14px', height: '14px', borderRadius: '50%',
+                            background: 'white', transition: 'left 0.3s ease',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                          }}></div>
+                        </button>
+                      </div>
+                    )}
+
                     <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', color: 'yellow', fontWeight: 'bold' }} onClick={() => handleOpenReset(u)} disabled={isResetting || togglingId === u._id}>
                       RESET
                     </button>
@@ -627,11 +886,11 @@ function AdminDashboard() {
         {activeTab === 'settings' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-              Global settings that apply to all users in the system.
+              Global settings that apply to all users in the system. File attachment is currently {anyFileUploadEnabled ? 'visible for permitted users' : 'hidden for everyone'}.
             </div>
 
             {/* Allow Message Delete Toggle */}
-            <div style={{ 
+            <div className="admin-setting-row" style={{ 
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
               background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
               border: '1px solid rgba(255,255,255,0.05)' 
@@ -643,14 +902,33 @@ function AdminDashboard() {
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
                   When enabled, users can delete their own messages for everyone. A "Delete" button appears in the message action menu.
                 </div>
+                {allowMessageDelete && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="admin-bulk-enable"
+                      onClick={() => handleBulkUpdateDelete(true)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(46,160,67,0.4)', background: 'rgba(46,160,67,0.12)', color: 'var(--success)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✓ Enable All
+                    </button>
+                    <button
+                      className="admin-bulk-disable"
+                      onClick={() => handleBulkUpdateDelete(false)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(248,81,73,0.4)', background: 'rgba(248,81,73,0.1)', color: 'var(--danger)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✕ Disable All
+                    </button>
+                  </div>
+                )}
               </div>
               <button
+                className="admin-toggle-btn"
                 onClick={handleToggleDelete}
                 disabled={togglingDelete}
                 style={{
                   position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
                   background: allowMessageDelete ? 'var(--success)' : 'rgba(255,255,255,0.15)',
-                  transition: 'background 0.3s ease', flexShrink: 0, marginLeft: '1rem',
+                  flexShrink: 0, marginLeft: '1rem',
                   boxShadow: allowMessageDelete ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
                   opacity: togglingDelete ? 0.5 : 1
                 }}
@@ -662,6 +940,159 @@ function AdminDashboard() {
                   boxShadow: '0 1px 4px rgba(0,0,0,0.3)'
                 }}></div>
               </button>
+            </div>
+
+            {/* ========== FILE UPLOAD SETTINGS ========== */}
+
+            {/* Restricted File Upload Toggle */}
+            <div className="admin-setting-row" style={{ 
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid rgba(255,255,255,0.05)' 
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg> Allow File Uploads
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                  Controls image sharing and verified file sharing for all users. Individual off switches stay off until you reset them.
+                </div>
+                {allowMediaSharing && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="admin-bulk-enable"
+                      onClick={() => handleBulkUpdateMedia(true)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(46,160,67,0.4)', background: 'rgba(46,160,67,0.12)', color: 'var(--success)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✓ Enable All
+                    </button>
+                    <button
+                      className="admin-bulk-disable"
+                      onClick={() => handleBulkUpdateMedia(false)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(248,81,73,0.4)', background: 'rgba(248,81,73,0.1)', color: 'var(--danger)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✕ Disable All
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                className="admin-toggle-btn"
+                onClick={handleToggleMediaSharing}
+                disabled={togglingFileUpload}
+                style={{
+                  position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                  background: allowMediaSharing ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  flexShrink: 0, marginLeft: '1rem',
+                  boxShadow: allowMediaSharing ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
+                  opacity: togglingFileUpload ? 0.5 : 1
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: '3px', left: allowMediaSharing ? '27px' : '3px',
+                  width: '22px', height: '22px', borderRadius: '50%',
+                  background: 'white', transition: 'left 0.3s ease',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.3)'
+                }}></div>
+              </button>
+            </div>
+
+            {/* Unrestricted File Upload Toggle */}
+            <div className="admin-setting-row" style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px',
+              border: '1px solid rgba(255,255,255,0.05)'
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  Unrestricted File Uploads
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                  Allows broader non-dangerous file formats and uses the extended file size limit below. Per-user Open Upload must also be enabled.
+                </div>
+                {allowUnrestrictedFileUpload && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="admin-bulk-enable"
+                      onClick={() => handleBulkUpdateUnrestricted(true)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(46,160,67,0.4)', background: 'rgba(46,160,67,0.12)', color: 'var(--success)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✓ Enable All
+                    </button>
+                    <button
+                      className="admin-bulk-disable"
+                      onClick={() => handleBulkUpdateUnrestricted(false)}
+                      style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(248,81,73,0.4)', background: 'rgba(248,81,73,0.1)', color: 'var(--danger)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                    >
+                      ✕ Disable All
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                className="admin-toggle-btn"
+                onClick={() => handleToggleFileUpload('unrestricted')}
+                disabled={togglingFileUpload}
+                style={{
+                  position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                  background: allowUnrestrictedFileUpload ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  flexShrink: 0, marginLeft: '1rem',
+                  boxShadow: allowUnrestrictedFileUpload ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
+                  opacity: togglingFileUpload ? 0.5 : 1
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: '3px', left: allowUnrestrictedFileUpload ? '27px' : '3px',
+                  width: '22px', height: '22px', borderRadius: '50%',
+                  background: 'white', transition: 'left 0.3s ease',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.3)'
+                }}></div>
+              </button>
+            </div>
+
+            {/* Max File Size Setting */}
+            <div style={{ 
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
+              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid rgba(255,255,255,0.05)' 
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  📦 Max File Size (Global)
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4', marginBottom: '0.5rem' }}>
+                  Default: 25MB | Maximum: 300MB.
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input 
+                    type="number" 
+                    min="25" 
+                    max="300" 
+                    value={maxFileSize}
+                    onChange={(e) => setMaxFileSize(Math.max(25, Math.min(300, parseInt(e.target.value) || 25)))}
+                    style={{
+                      width: '100px', padding: '0.4rem', borderRadius: '6px', border: '1px solid var(--accent)',
+                      background: 'rgba(0,0,0,0.3)', color: 'white', fontSize: '0.9rem'
+                    }}
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>MB</span>
+                  <button
+                    onClick={handleSetMaxFileSize}
+                    disabled={savingFileSize}
+                    style={{
+                      padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid var(--accent)',
+                      background: 'var(--accent)', color: 'white', fontSize: '0.85rem', cursor: 'pointer',
+                      marginLeft: '0.5rem'
+                    }}
+                  >
+                    {savingFileSize ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
             </div>
 
           </div>

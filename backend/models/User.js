@@ -15,6 +15,11 @@ const UserSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user'
   },
+  firstName: { type: String, default: '' },
+  lastName: { type: String, default: '' },
+  profilePic: { type: String, default: '' },
+  bio: { type: String, default: '' },
+  isProfileSetup: { type: Boolean, default: false },
   friends: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   sentRequests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   receivedRequests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
@@ -39,7 +44,24 @@ const UserSchema = new mongoose.Schema({
     default: {}
   },
   allowMessageDelete: { type: Boolean, default: false },
-  canDeleteMessages: { type: Boolean, default: true }
+  canDeleteMessages: { type: Boolean, default: true },
+  deleteManuallyDisabled: { type: Boolean, default: false },
+  allowMediaSharing: { type: Boolean, default: false },
+  canMediaSharing: { type: Boolean, default: true },
+  mediaSharingManuallyDisabled: { type: Boolean, default: false },
+  // File upload restrictions (security-focused)
+  allowFileUpload: { type: Boolean, default: false }, // Global: admin allows file uploads
+  canUploadFiles: { type: Boolean, default: true }, // Per-user: override for specific users
+  allowRestrictedFileUpload: { type: Boolean, default: false }, // Global: verified file types only
+  allowUnrestrictedFileUpload: { type: Boolean, default: false }, // Global: broader file support
+  canRestrictedFileUpload: { type: Boolean, default: true }, // Per-user verified mode
+  canUnrestrictedFileUpload: { type: Boolean, default: true }, // Per-user unrestricted mode
+  unrestrictedFileSharingManuallyDisabled: { type: Boolean, default: false },
+  maxFileSize: { type: Number, default: 25 }, // in MB, default 25MB
+  allowedFileTypes: {
+    type: [String],
+    default: [] // empty array means no file types allowed by default
+  }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', UserSchema);

@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import UserProfileViewModal from '../components/UserProfileViewModal';
+import FileDisplay from '../components/FileDisplay';
+import { formatFileSize } from '../assets/fileIcons';
+import ImageGalleryModal from '../components/ImageGalleryModal';
 
 function ChatRoom() {
   const { friendId } = useParams(); 
@@ -22,41 +25,62 @@ function ChatRoom() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [fullScreenImage, setFullScreenImage] = useState(null);
+  const [selectedAttachments, setSelectedAttachments] = useState([]);
+  const [galleryState, setGalleryState] = useState({ isOpen: false, initialIndex: 0 });
   const [compressionMode, setCompressionMode] = useState('compressed'); // 'compressed' or 'hd'
-  const [originalFileSize, setOriginalFileSize] = useState(0);
-  const [compressedFileSize, setCompressedFileSize] = useState(0);
   const [isCompressing, setIsCompressing] = useState(false);
+
+  // File upload states
+  const [fileUploadError, setFileUploadError] = useState(null);
+  const [allowMediaSharing, setAllowMediaSharing] = useState(false);
+  const [allowFileUpload, setAllowFileUpload] = useState(false);
+  const [allowRestrictedFileUpload, setAllowRestrictedFileUpload] = useState(false);
+  const [allowUnrestrictedFileUpload, setAllowUnrestrictedFileUpload] = useState(false);
+  const [canMediaSharing, setCanMediaSharing] = useState(true);
+  const [canRestrictedFileUpload, setCanRestrictedFileUpload] = useState(true);
+  const [canUnrestrictedFileUpload, setCanUnrestrictedFileUpload] = useState(false);
+  const [verifiedFileTypes, setVerifiedFileTypes] = useState([]);
+  const [maxFileSize, setMaxFileSize] = useState(25); // in MB
 
   const [allowMessageDelete, setAllowMessageDelete] = useState(false);
   const [canDeleteMessages, setCanDeleteMessages] = useState(true);
   const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null);
+  const [blockConfirm, setBlockConfirm] = useState(null);
+  const [removeConfirm, setRemoveConfirm] = useState(null);
   const [isViewProfileOpen, setIsViewProfileOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const fileAttachmentRef = useRef(null);
   const chatContainerRef = useRef(null);
   const firstUnreadIdRef = useRef(null);
   const unreadDividerRef = useRef(null);
   const hasLoadedOnceRef = useRef(false);
+  const canShareMedia = user?.role === 'admin' || (allowMediaSharing && canMediaSharing);
+  const canUseRestrictedUpload = canShareMedia && (canRestrictedFileUpload !== false);
+  const canUseUnrestrictedUpload = canShareMedia && allowUnrestrictedFileUpload && canUnrestrictedFileUpload;
+  const canAttachFile = canUseRestrictedUpload || canUseUnrestrictedUpload;
+  const canUseDelete = user?.role === 'admin' || (allowMessageDelete && canDeleteMessages !== false);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
       if (e.key === 'Escape') {
         if (isViewProfileOpen) {
           setIsViewProfileOpen(false);
-        } else if (fullScreenImage) {
-          setFullScreenImage(null);
+        } else if (galleryState.isOpen) {
+          setGalleryState(prev => ({ ...prev, isOpen: false }));
         } else if (deleteConfirmMsg) {
           setDeleteConfirmMsg(null);
+        } else if (blockConfirm) {
+          setBlockConfirm(null);
+        } else if (removeConfirm) {
+          setRemoveConfirm(null);
         } else if (activeMenuId) {
           setActiveMenuId(null);
-        } else if (imagePreview) {
-          setImagePreview(null);
-          setSelectedImage(null);
+        } else if (selectedAttachments.length > 0) {
+          setSelectedAttachments([]);
+          setFileUploadError(null);
         } else if (replyingTo || editingMessage) {
           setReplyingTo(null);
           setEditingMessage(null);
@@ -70,7 +94,7 @@ function ChatRoom() {
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isViewProfileOpen, fullScreenImage, deleteConfirmMsg, activeMenuId, imagePreview, replyingTo, editingMessage, navigate]);
+  }, [isViewProfileOpen, galleryState.isOpen, deleteConfirmMsg, blockConfirm, removeConfirm, activeMenuId, selectedAttachments, replyingTo, editingMessage, navigate]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -130,8 +154,23 @@ function ChatRoom() {
       fetch(`${import.meta.env.VITE_API_URL}/api/users/user/${user.id}`)
         .then(res => res.json())
         .then(data => {
+           if (data && data.allowMessageDelete !== undefined) {
+             setAllowMessageDelete(data.allowMessageDelete);
+           }
+           if (data && data.allowMediaSharing !== undefined) {
+             setAllowMediaSharing(data.allowMediaSharing);
+           }
+           if (data && data.allowUnrestrictedFileUpload !== undefined) {
+             setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload);
+           }
            if (data && data.canDeleteMessages !== undefined) {
              setCanDeleteMessages(data.canDeleteMessages);
+           }
+           if (data) {
+             setCanMediaSharing((data.canMediaSharing ?? data.canUploadFiles) !== false);
+             setCanRestrictedFileUpload((data.canRestrictedFileUpload ?? data.canUploadFiles) !== false);
+             setCanUnrestrictedFileUpload(data.canUnrestrictedFileUpload !== false);
+             if (data.maxFileSize) setMaxFileSize(data.maxFileSize);
            }
         })
         .catch(() => {});
@@ -151,13 +190,38 @@ function ChatRoom() {
     }
   }, [user?.id, friendId]);
 
+  // Load file upload settings
+  useEffect(() => {
+    const loadFileSettings = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/file-settings`);
+        if (res.ok) {
+          const data = await res.json();
+          setAllowMediaSharing(data.allowMediaSharing ?? data.allowFileUpload ?? false);
+          setAllowFileUpload(data.allowFileUpload || false);
+          setAllowRestrictedFileUpload(data.allowRestrictedFileUpload ?? data.allowFileUpload ?? false);
+          setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload || false);
+          setVerifiedFileTypes(data.verifiedFileTypes || data.allowedFileTypes || []);
+          setMaxFileSize(data.maxFileSize || 25);
+        }
+      } catch (error) {
+        console.error('Error loading file settings:', error);
+      }
+    };
+    loadFileSettings();
+  }, []);
+
   const handleBlockUser = async (targetId) => {
-    if (!window.confirm("Are you sure you want to block this user?")) return;
+    setBlockConfirm(targetId);
+  };
+
+  const confirmBlockUser = async () => {
+    if (!blockConfirm) return;
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/block`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/block-user`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, targetId })
+        body: JSON.stringify({ userId: user.id, blockId: blockConfirm })
       });
       if (res.ok) {
         setUserState('blocked');
@@ -168,17 +232,43 @@ function ChatRoom() {
     } catch (err) {
       console.error(err);
       alert('Network error while blocking user');
+    } finally {
+      setBlockConfirm(null);
+    }
+  };
+
+  const handleUnblockUser = async (targetId) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/unblock-user`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, blockId: targetId })
+      });
+      if (res.ok) {
+        setUserState('friend');
+        if (socket) socket.emit('user_unblocked', { userId: user.id, unblockedId: targetId });
+      } else {
+        const data = await res.json();
+        alert(data.message || 'Failed to unblock user');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error while unblocking user');
     }
   };
 
   const handleRemoveFriend = async (e, friendId) => {
     if (e?.stopPropagation) e.stopPropagation(); 
-    if (!window.confirm("Are you sure you want to remove this friend?")) return;
+    setRemoveConfirm(friendId);
+  };
+
+  const confirmRemoveFriend = async () => {
+    if (!removeConfirm) return;
     try {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/remove-friend`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, friendId })
+        body: JSON.stringify({ userId: user.id, friendId: removeConfirm })
       });
       if (res.ok) {
         setUserState('none');
@@ -189,6 +279,8 @@ function ChatRoom() {
     } catch (err) {
       console.error(err);
       alert('Network error');
+    } finally {
+      setRemoveConfirm(null);
     }
   };
 
@@ -240,10 +332,17 @@ function ChatRoom() {
       }
     };
 
+    const handleUnblockedYou = (unblockerId) => {
+      if (unblockerId === friendId) {
+        setUserState('friend');
+      }
+    };
+
     socket.on('receive_message', handleReceive);
     socket.on('message_edited', handleEditReceive);
     socket.on('messages_read', handleMessagesRead);
     socket.on('chat_error', handleError);
+    socket.on('friend_unblocked_you', handleUnblockedYou);
 
     const handleDeleteReceive = ({ messageId }) => {
       setMessages((prev) => prev.filter(m => m._id !== messageId));
@@ -256,6 +355,7 @@ function ChatRoom() {
       socket.off('messages_read', handleMessagesRead);
       socket.off('chat_error', handleError);
       socket.off('message_deleted', handleDeleteReceive);
+      socket.off('friend_unblocked_you', handleUnblockedYou);
     };
   }, [socket, user, friendId, userState]);
 
@@ -373,141 +473,238 @@ function ChatRoom() {
   };
 
   const handleImageChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files || files.length === 0) return;
 
-    // Allow up to 25MB raw input (compression will handle it)
-    if (file.size > 25 * 1024 * 1024) {
-      alert("Image size must be less than 25MB");
+    const validFiles = [];
+    for (const file of files) {
+      if (file.size > 25 * 1024 * 1024) {
+        alert(`Image ${file.name} must be less than 25MB`);
+      } else {
+        validFiles.push(file);
+      }
+    }
+
+    if (validFiles.length === 0) return;
+
+    setIsCompressing(true);
+
+    const newAttachments = await Promise.all(validFiles.map(async (file) => {
+      const id = Math.random().toString(36).substr(2, 9);
+      try {
+        const compressed = await compressImage(file, compressionMode);
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve({
+              id,
+              type: 'image',
+              originalFile: file,
+              compressedFile: compressed,
+              preview: reader.result,
+              originalSize: file.size,
+              compressedSize: compressed.size
+            });
+          };
+          reader.readAsDataURL(compressed);
+        });
+      } catch (err) {
+        console.error('Compression error:', err);
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve({
+              id,
+              type: 'image',
+              originalFile: file,
+              compressedFile: file,
+              preview: reader.result,
+              originalSize: file.size,
+              compressedSize: file.size
+            });
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+    }));
+
+    setSelectedAttachments(prev => [...prev, ...newAttachments]);
+    setIsCompressing(false);
+  };
+
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    if (!files || files.length === 0) return;
+
+    setFileUploadError(null);
+    if (!canShareMedia) {
+      setFileUploadError('Image and file sharing are not enabled for your account');
+      e.target.value = '';
+      return;
+    }
+    if (!canAttachFile) {
+      setFileUploadError('File attachments are not enabled for your account');
+      e.target.value = '';
       return;
     }
 
-    setOriginalFileSize(file.size);
-    setIsCompressing(true);
-
-    try {
-      const compressed = await compressImage(file, compressionMode);
-      setCompressedFileSize(compressed.size);
-      setSelectedImage(compressed);
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-        setIsCompressing(false);
-      };
-      reader.readAsDataURL(compressed);
-    } catch (err) {
-      console.error('Compression error:', err);
-      // Fallback to original
-      setSelectedImage(file);
-      setCompressedFileSize(file.size);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-        setIsCompressing(false);
-      };
-      reader.readAsDataURL(file);
+    const activeMaxFileSize = canUseUnrestrictedUpload ? maxFileSize : 25;
+    const maxSizeBytes = activeMaxFileSize * 1024 * 1024;
+    
+    const newAttachments = [];
+    for (const file of files) {
+      const extension = file.name.split('.').pop().toLowerCase();
+      if (!canUseUnrestrictedUpload && verifiedFileTypes.length > 0 && !verifiedFileTypes.includes(extension)) {
+        setFileUploadError(`.${extension} is not a verified file format`);
+        continue;
+      }
+      if (file.size > maxSizeBytes) {
+        setFileUploadError(`File size exceeds limit (${activeMaxFileSize}MB)`);
+        continue;
+      }
+      
+      newAttachments.push({
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'file',
+        originalFile: file,
+        originalSize: file.size,
+      });
     }
+
+    if (newAttachments.length > 0) {
+      setSelectedAttachments(prev => [...prev, ...newAttachments]);
+    }
+    e.target.value = '';
   };
 
-  // Re-compress when user toggles compression mode
   const handleCompressionToggle = async (newMode) => {
     setCompressionMode(newMode);
-    if (!fileInputRef.current?.files?.[0]) return;
-    const originalFile = fileInputRef.current.files[0];
+    
+    const imageAttachments = selectedAttachments.filter(a => a.type === 'image');
+    if (imageAttachments.length === 0) return;
+
     setIsCompressing(true);
-    try {
-      const compressed = await compressImage(originalFile, newMode);
-      setCompressedFileSize(compressed.size);
-      setSelectedImage(compressed);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-        setIsCompressing(false);
-      };
-      reader.readAsDataURL(compressed);
-    } catch (err) {
-      setIsCompressing(false);
-    }
+    
+    const recompressedAttachments = await Promise.all(selectedAttachments.map(async (attachment) => {
+      if (attachment.type !== 'image') return attachment;
+      try {
+        const compressed = await compressImage(attachment.originalFile, newMode);
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+             resolve({
+                ...attachment,
+                compressedFile: compressed,
+                preview: reader.result,
+                compressedSize: compressed.size
+             });
+          };
+          reader.readAsDataURL(compressed);
+        });
+      } catch (err) {
+        return attachment;
+      }
+    }));
+    
+    setSelectedAttachments(recompressedAttachments);
+    setIsCompressing(false);
   };
 
-  const uploadImage = async () => {
-    if (!selectedImage) return null;
-    setIsUploading(true);
-    console.log("uploadImage started for file:", selectedImage.name);
-    const formData = new FormData();
-    formData.append('image', selectedImage);
+  const uploadWithProgress = (url, formData, onProgress) => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = Math.round((e.loaded / e.total) * 100);
+          onProgress(percentComplete);
+        }
+      };
+      
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            resolve(response);
+          } catch (e) {
+            resolve(xhr.responseText);
+          }
+        } else {
+          try {
+            const errResponse = JSON.parse(xhr.responseText);
+            reject(new Error(errResponse.message || `Upload failed with status: ${xhr.status}`));
+          } catch (e) {
+            reject(new Error(`Upload failed with status: ${xhr.status}`));
+          }
+        }
+      };
+      
+      xhr.onerror = () => reject(new Error('Network Error'));
+      xhr.send(formData);
+    });
+  };
 
-    try {
-      const qualityParam = compressionMode === 'hd' ? '?quality=hd' : '?quality=compressed';
-      console.log("Fetching to:", `${import.meta.env.VITE_API_URL}/api/messages/upload${qualityParam}`);
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/upload${qualityParam}`, {
-        method: 'POST',
-        body: formData,
-      });
-      console.log("Fetch response status:", res.status);
-      const data = await res.json();
-      console.log("Fetch response data:", data);
-      if (res.ok) {
-        return data.imageUrl;
-      } else {
-        alert(data.message || "Failed to upload image");
-        return null;
-      }
-    } catch (err) {
-      console.error("Error uploading image:", err);
-      alert("Network error while uploading image");
-      return null;
-    } finally {
-      setIsUploading(false);
-    }
+  const uploadImage = async (imageFile, onProgress) => {
+    if (!imageFile) return null;
+    if (!canShareMedia) throw new Error('Image sharing is disabled for your account');
+    
+    console.log("uploadImage started for file:", imageFile.name);
+    const formData = new FormData();
+    formData.append('image', imageFile);
+    formData.append('userId', user.id);
+
+    const qualityParam = compressionMode === 'hd' ? '?quality=hd' : '?quality=compressed';
+    const data = await uploadWithProgress(
+      `${import.meta.env.VITE_API_URL}/api/messages/upload${qualityParam}`,
+      formData,
+      onProgress
+    );
+    return data.imageUrl;
+  };
+
+  const uploadFileHandler = async (fileObj, onProgress) => {
+    if (!fileObj) return null;
+    if (!canAttachFile) throw new Error('File attachments are not enabled for your account');
+    
+    console.log("uploadFile started for file:", fileObj.name);
+    const formData = new FormData();
+    formData.append('file', fileObj);
+    formData.append('userId', user.id);
+
+    const data = await uploadWithProgress(
+      `${import.meta.env.VITE_API_URL}/api/messages/upload-file`,
+      formData,
+      onProgress
+    );
+    return data;
   };
 
   const sendMessage = async (e) => {
     e.preventDefault();
-    if ((inputMessage.trim() === '' && !selectedImage) || userState === 'blocked' || userState === 'none') return;
+    if ((inputMessage.trim() === '' && selectedAttachments.length === 0) || userState === 'blocked' || userState === 'none') return;
     
     if (userState.includes('pending') && sentCount >= 10) {
        alert("Limit of 10 messages reached. Accept or wait for them to accept to continue.");
        return;
     }
 
-    let imageUrl = null;
-    if (selectedImage) {
-      console.log("Calling uploadImage from sendMessage...");
-      imageUrl = await uploadImage();
-      if (!imageUrl) {
-        console.log("uploadImage failed, aborting sendMessage.");
-        setSelectedImage(null);
-        setImagePreview(null);
-        return; // Stop if upload failed
-      }
-      console.log("uploadImage succeeded, imageUrl:", imageUrl);
-    }
+    const textToSend = inputMessage;
+    const attachmentsToSend = [...selectedAttachments];
+    const replyObj = replyingTo;
+    const isEdit = editingMessage;
 
-    if (editingMessage) {
-      socket.emit('edit_message', {
-        messageId: editingMessage._id,
-        newText: inputMessage
-      });
-      setEditingMessage(null);
-    } else {
-      socket.emit('send_message', {
-        senderId: user.id,
-        receiverId: friendId,
-        text: inputMessage,
-        imageUrl: imageUrl,
-        replyTo: replyingTo ? replyingTo._id : null
-      });
-      setReplyingTo(null);
-    }
-    
+    // Clear inputs immediately to prevent double sending and allow next message composition
     setInputMessage('');
     localStorage.removeItem(`draft_${user?.id}_${friendId}`);
-    setSelectedImage(null);
-    setImagePreview(null);
-    // Clear unread divider after user sends a message
+    setSelectedAttachments([]);
+    setFileUploadError(null);
+    setReplyingTo(null);
+    setEditingMessage(null);
+    if (fileAttachmentRef.current) fileAttachmentRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = '';
     firstUnreadIdRef.current = null;
+
     if (inputRef.current) {
       inputRef.current.style.height = '42px';
       inputRef.current.focus();
@@ -515,6 +712,105 @@ function ChatRoom() {
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 10);
+
+    if (isEdit) {
+      socket.emit('edit_message', {
+        messageId: isEdit._id,
+        newText: textToSend
+      });
+      return;
+    }
+
+    if (attachmentsToSend.length === 0) {
+      socket.emit('send_message', {
+        senderId: user.id,
+        receiverId: friendId,
+        text: textToSend,
+        imageUrl: null,
+        imageUrls: [],
+        file: null,
+        files: [],
+        replyTo: replyObj ? replyObj._id : null
+      });
+      return;
+    }
+
+    // Creating optimistic message with progress
+    const tempId = `temp-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    const localImageUrls = attachmentsToSend.filter(a => a.type === 'image').map(a => a.preview);
+    const localFiles = attachmentsToSend.filter(a => a.type === 'file').map(a => ({
+        originalName: a.originalFile.name, 
+        size: a.originalSize, 
+        mimeType: a.originalFile.type || 'application/octet-stream' 
+    }));
+
+    const tempMessage = {
+      _id: tempId,
+      sender: { _id: user.id, username: user.username || 'You' },
+      receiver: { _id: friendId },
+      text: textToSend,
+      imageUrl: null,
+      imageUrls: localImageUrls,
+      file: null,
+      files: localFiles,
+      createdAt: new Date().toISOString(),
+      isRead: false,
+      isEdited: false,
+      replyTo: replyObj || null,
+      isUploading: true,
+      progress: 0,
+    };
+
+    setMessages(prev => [...prev, tempMessage]);
+
+    try {
+      const progresses = new Array(attachmentsToSend.length).fill(0);
+      
+      const uploadPromises = attachmentsToSend.map(async (attachment, index) => {
+         const onProgress = (p) => {
+            progresses[index] = p;
+            const avgProgress = Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length);
+            setMessages(prev => prev.map(m => m._id === tempId ? { ...m, progress: avgProgress } : m));
+         };
+
+         if (attachment.type === 'image') {
+            const url = await uploadImage(attachment.compressedFile || attachment.originalFile, onProgress);
+            return { type: 'image', url };
+         } else {
+            const fileData = await uploadFileHandler(attachment.originalFile, onProgress);
+            return { type: 'file', fileData };
+         }
+      });
+      
+      const results = await Promise.all(uploadPromises);
+      
+      const finalImageUrls = results.filter(r => r.type === 'image').map(r => r.url);
+      const finalFiles = results.filter(r => r.type === 'file').map(r => r.fileData);
+
+      // Success: emit the actual message over socket
+      socket.emit('send_message', {
+        senderId: user.id,
+        receiverId: friendId,
+        text: textToSend,
+        imageUrl: null,
+        imageUrls: finalImageUrls,
+        file: null,
+        files: finalFiles,
+        replyTo: replyObj ? replyObj._id : null
+      });
+
+      // Remove the temp message, the websocket server broadcast will instantly replace it
+      setMessages(prev => prev.filter(m => m._id !== tempId));
+
+    } catch (err) {
+      console.error("Upload error:", err);
+      // Show error on the temp message
+      setMessages(prev => prev.map(m => m._id === tempId ? { 
+        ...m, 
+        isUploading: false, 
+        uploadError: err.message || 'Failed to upload attachments' 
+      } : m));
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -564,6 +860,57 @@ function ChatRoom() {
     setTimeout(() => inputRef.current?.focus(), 10);
   };
 
+  const handleTouchStart = (e) => {
+    const touch = e.touches[0];
+    e.currentTarget.dataset.startx = touch.clientX;
+    e.currentTarget.dataset.starty = touch.clientY;
+    e.currentTarget.style.transition = 'none';
+  };
+
+  const handleTouchMove = (e) => {
+    const startX = parseFloat(e.currentTarget.dataset.startx);
+    const startY = parseFloat(e.currentTarget.dataset.starty);
+    if (!startX || !startY) return;
+
+    const touch = e.touches[0];
+    const diffX = touch.clientX - startX;
+    const diffY = Math.abs(touch.clientY - startY);
+
+    if (diffY > 20 && diffX < 20) {
+      e.currentTarget.style.transform = `translateX(0px)`;
+      e.currentTarget.dataset.startx = '';
+      return;
+    }
+
+    if (diffX > 0 && diffX < 70) {
+      e.currentTarget.style.transform = `translateX(${diffX}px)`;
+    } else if (diffX >= 70) {
+      e.currentTarget.style.transform = `translateX(70px)`;
+    }
+  };
+
+  const handleTouchEnd = (e, msg) => {
+    const startX = parseFloat(e.currentTarget.dataset.startx);
+    if (!startX) {
+      e.currentTarget.style.transition = 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)';
+      e.currentTarget.style.transform = 'translateX(0px)';
+      return;
+    }
+
+    const touch = e.changedTouches[0];
+    const diffX = touch.clientX - startX;
+
+    if (diffX >= 50) {
+      if (window.navigator?.vibrate) window.navigator.vibrate(50);
+      handleReply(msg);
+    }
+
+    e.currentTarget.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+    e.currentTarget.style.transform = 'translateX(0px)';
+    e.currentTarget.dataset.startx = '';
+    e.currentTarget.dataset.starty = '';
+  };
+
   const handleEdit = (msg) => {
     if (userState === 'blocked' || userState === 'none') return;
     setEditingMessage(msg);
@@ -576,9 +923,11 @@ function ChatRoom() {
   const cancelAction = () => {
     setReplyingTo(null);
     setEditingMessage(null);
-    setSelectedImage(null);
-    setImagePreview(null);
+    setSelectedAttachments([]);
+    setFileUploadError(null);
     setInputMessage('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (fileAttachmentRef.current) fileAttachmentRef.current.value = '';
     inputRef.current?.focus();
   };
 
@@ -643,6 +992,23 @@ function ChatRoom() {
 
   const isOnline = onlineUsers?.some(ou => (ou.userId || ou) === friendId);
 
+  const allChatImages = React.useMemo(() => {
+    let imgs = [];
+    messages.forEach(msg => {
+      if (msg.imageUrl) imgs.push(msg.imageUrl);
+      if (msg.imageUrls) imgs.push(...msg.imageUrls);
+    });
+    return imgs;
+  }, [messages]);
+
+  const sentMedia = React.useMemo(() => messages.filter(m => m.sender._id === user?.id && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, user?.id]);
+  const receivedMedia = React.useMemo(() => messages.filter(m => m.sender._id === friendId && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, friendId]);
+
+  const openImageGallery = (url) => {
+    const idx = allChatImages.indexOf(url);
+    setGalleryState({ isOpen: true, initialIndex: idx !== -1 ? idx : 0 });
+  };
+
   return (
     <div className="chat-container" onClick={() => setActiveMenuId(null)}>
       <div className="glass-panel chat-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(13,17,23,0.97)' }} onClick={(e) => e.stopPropagation()}>
@@ -681,8 +1047,114 @@ function ChatRoom() {
         profileUser={friendDetails}
         relationState={userState}
         onBlockUser={handleBlockUser}
+        onUnblockUser={handleUnblockUser}
         onRemoveFriend={handleRemoveFriend}
+        sharedMedia={{ sent: sentMedia, received: receivedMedia, allImages: allChatImages, openImageGallery }}
       />
+      {/* Block Confirmation Modal */}
+      {blockConfirm && (
+        <div
+          onClick={() => setBlockConfirm(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🚫</div>
+            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)', fontSize: '1.1rem', fontWeight: '700' }}>Block this user?</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: '1.4' }}>
+              They will no longer be able to send you messages or see your profile.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <button
+                onClick={confirmBlockUser}
+                style={{
+                  width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
+                  fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
+                  transition: 'transform 0.15s ease'
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                Block User
+              </button>
+              <button
+                onClick={() => setBlockConfirm(null)}
+                style={{
+                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
+                  fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'background 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Friend Confirmation Modal */}
+      {removeConfirm && (
+        <div
+          onClick={() => setRemoveConfirm(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>❌</div>
+            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)', fontSize: '1.1rem', fontWeight: '700' }}>Remove this friend?</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: '1.4' }}>
+              Are you sure you want to remove this user from your friends list?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <button
+                onClick={confirmRemoveFriend}
+                style={{
+                  width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
+                  fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
+                  transition: 'transform 0.15s ease'
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                Remove Friend
+              </button>
+              <button
+                onClick={() => setRemoveConfirm(null)}
+                style={{
+                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
+                  fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'background 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Confirmation Modal */}
       {deleteConfirmMsg && (
         <div 
@@ -735,25 +1207,12 @@ function ChatRoom() {
         </div>
       )}
 
-      {fullScreenImage && (
-        <div 
-          onClick={() => setFullScreenImage(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)', cursor: 'zoom-out' }}
-        >
-          <img 
-            src={fullScreenImage} 
-            alt="Fullscreen" 
-            style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 0 40px rgba(0,0,0,0.8)' }} 
-            onClick={(e) => e.stopPropagation()} 
-          />
-          <button 
-            onClick={() => setFullScreenImage(null)}
-            style={{ position: 'absolute', top: '20px', right: '30px', background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', borderRadius: '50%', width: '40px', height: '40px', fontSize: '1.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          >
-            &times;
-          </button>
-        </div>
-      )}
+      <ImageGalleryModal 
+        isOpen={galleryState.isOpen}
+        onClose={() => setGalleryState(prev => ({ ...prev, isOpen: false }))}
+        images={allChatImages}
+        initialIndex={galleryState.initialIndex}
+      />
 
       <div className="glass-panel messages-area" style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', padding: 0 }}>
         
@@ -828,6 +1287,9 @@ function ChatRoom() {
                   id={`msg-${msg._id}`}
                   className={`message ${isSelf ? 'self' : 'other'}`}
                   style={{ position: 'relative', paddingBottom: '0.4rem', maxWidth: '82%', minWidth: '110px', opacity: (userState === 'friend' || userState.includes('pending')) ? 1 : 0.8 }}
+                  onTouchStart={handleTouchStart}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={(e) => handleTouchEnd(e, msg)}
                 >
                 <button 
                   onClick={(e) => { e.stopPropagation(); setActiveMenuId(showMenu ? null : msg._id); }}
@@ -854,7 +1316,7 @@ function ChatRoom() {
                         {isSelf && (
                           <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
                         )}
-                        {canDeleteMessages !== false && isSelf && (
+                        {canUseDelete && isSelf && (
                           <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: '#f85149', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
                         )}
                       </>
@@ -874,7 +1336,7 @@ function ChatRoom() {
                       <strong style={{ color: isSelf ? '#ddd' : 'var(--accent)' }}>{msg.replyTo.sender?.username}</strong>
                       <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>{formatTime(msg.replyTo.createdAt)}</span>
                     </div>
-                    <div>{msg.replyTo.text ? (msg.replyTo.text.length > 60 ? msg.replyTo.text.substring(0, 60) + '...' : msg.replyTo.text) : (msg.replyTo.imageUrl ? '[Image]' : '')}</div>
+                    <div>{msg.replyTo.text ? (msg.replyTo.text.length > 60 ? msg.replyTo.text.substring(0, 60) + '...' : msg.replyTo.text) : (msg.replyTo.imageUrl ? '[Image]' : msg.replyTo.file ? '[File]' : '[Message]')}</div>
                   </div>
                 )}
 
@@ -884,14 +1346,55 @@ function ChatRoom() {
 
                 <div style={{ lineHeight: '1.4', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>{msg.text}</div>
 
-                {msg.imageUrl && (
-                  <div style={{ marginTop: '0.5rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
-                    <img 
-                      src={msg.imageUrl} 
-                      alt="Shared content" 
-                      style={{ maxWidth: '100%', maxHeight: '400px', display: 'block', cursor: 'pointer' }} 
-                      onClick={() => setFullScreenImage(msg.imageUrl)}
-                    />
+                {(msg.imageUrls?.length > 0 || msg.imageUrl) && (
+                  <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '4px', position: 'relative', maxWidth: '320px' }}>
+                    {msg.imageUrl && (
+                      <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', width: '100%', position: 'relative', background: 'rgba(0,0,0,0.1)' }}>
+                        <img src={msg.imageUrl} style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer' }} onClick={() => !msg.isUploading && openImageGallery(msg.imageUrl)} />
+                      </div>
+                    )}
+                    {msg.imageUrls && msg.imageUrls.map((url, i) => (
+                      <div key={i} style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', width: msg.imageUrls.length === 1 ? '100%' : 'calc(50% - 2.5px)', position: 'relative', flexGrow: 1, background: 'rgba(0,0,0,0.1)' }}>
+                        <img src={url} style={{ width: '100%', height: msg.imageUrls.length === 1 ? 'auto' : '150px', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer', opacity: msg.isUploading || msg.uploadError ? 0.6 : 1 }} onClick={() => !msg.isUploading && openImageGallery(url)} />
+                      </div>
+                    ))}
+                    {msg.isUploading && msg.imageUrls?.length > 0 && (
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', zIndex: 10, borderRadius: '8px' }}>
+                        <div style={{ width: '60%', height: '6px', background: 'rgba(255,255,255,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${msg.progress || 0}%`, height: '100%', background: 'var(--success)', transition: 'width 0.2s ease-out' }}></div>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', color: 'white', marginTop: '0.4rem', fontWeight: 'bold' }}>{msg.progress || 0}%</span>
+                      </div>
+                    )}
+                    {msg.uploadError && msg.imageUrls?.length > 0 && (
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,0,0,0.5)', color: 'white', fontSize: '0.85rem', fontWeight: 'bold', zIndex: 10, borderRadius: '8px' }}>
+                        <div style={{ background: 'var(--panel-bg)', padding: '4px 10px', borderRadius: '4px' }}>
+                          {msg.uploadError}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(msg.files?.length > 0 || msg.file) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '0.5rem', position: 'relative' }}>
+                    {msg.file && <FileDisplay file={msg.file} message={msg} />}
+                    {msg.files && msg.files.map((f, i) => <FileDisplay key={i} file={f} message={msg} />)}
+                    
+                    {(msg.isUploading || msg.uploadError) && (
+                      <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: msg.uploadError ? 'rgba(255,0,0,0.15)' : 'rgba(0,0,0,0.45)', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem', border: msg.uploadError ? '1px solid rgba(255,0,0,0.4)' : 'none' }}>
+                        {msg.isUploading ? (
+                          <>
+                            <div style={{ width: '80%', height: '5px', background: 'rgba(255,255,255,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ width: `${msg.progress || 0}%`, height: '100%', background: 'var(--success)', transition: 'width 0.2s ease-out' }}></div>
+                            </div>
+                            <span style={{ fontSize: '0.75rem', color: 'white', marginTop: '0.3rem', fontWeight: 'bold' }}>Uploading {msg.progress || 0}%</span>
+                          </>
+                        ) : (
+                          <span style={{ color: '#ff6b6b', fontSize: '0.85rem', fontWeight: 'bold', background: 'var(--panel-bg)', padding: '4px 8px', borderRadius: '4px' }}>{msg.uploadError}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -931,43 +1434,47 @@ function ChatRoom() {
              </div>
           ) : (
              <div style={{ width: '100%' }}>
-                {(replyingTo || editingMessage || imagePreview) && (
+                {(replyingTo || editingMessage || selectedAttachments.length > 0 || fileUploadError) && (
                   <div style={{ padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    {fileUploadError && (
+                      <div style={{ background: 'rgba(231, 76, 60, 0.2)', border: '1px solid #E74C3C', borderRadius: '6px', padding: '0.5rem 0.75rem', color: '#FF6B6B', fontSize: '0.8rem' }}>
+                        {fileUploadError}
+                      </div>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        {imagePreview && (
-                          <div style={{ position: 'relative', width: '40px', height: '40px', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--glass-border)' }}>
-                            <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            {(isUploading || isCompressing) && (
-                               <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                 <span className="spinner" style={{ width: '12px', height: '12px', marginRight: 0 }}></span>
-                               </div>
-                            )}
-                          </div>
-                        )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        {selectedAttachments.map(a => (
+                           a.type === 'image' ? (
+                              <div key={a.id} style={{ position: 'relative', width: '40px', height: '40px', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--glass-border)' }}>
+                                <img src={a.preview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                <button type="button" onClick={() => setSelectedAttachments(prev => prev.filter(x => x.id !== a.id))} style={{position: 'absolute', top: 0, right: 0, background: 'rgba(255,0,0,0.8)', color: 'white', border: 'none', width: '14px', height: '14px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10}}>x</button>
+                                {(isCompressing || isUploading) && (
+                                   <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                     <span className="spinner" style={{ width: '12px', height: '12px', marginRight: 0 }}></span>
+                                   </div>
+                                )}
+                              </div>
+                           ) : (
+                              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: 'rgba(88, 166, 255, 0.1)', borderRadius: '6px', border: '1px solid rgba(88, 166, 255, 0.3)' }}>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                                  <polyline points="13 2 13 9 20 9"></polyline>
+                                </svg>
+                                <span style={{ fontSize: '0.8rem' }}>{a.originalFile.name}</span>
+                                <button type="button" onClick={() => setSelectedAttachments(prev => prev.filter(x => x.id !== a.id))} style={{background: 'transparent', color: '#ff6b6b', border: 'none', marginLeft: '4px', cursor: 'pointer', fontSize: '12px'}}>✖</button>
+                              </div>
+                           )
+                        ))}
                         <span>
                           {replyingTo && <>Replying to <strong>{replyingTo.sender.username}</strong>: {replyingTo.text.slice(0, 30)}...</>}
                           {editingMessage && <>Editing message...</>}
-                          {imagePreview && !replyingTo && !editingMessage && (
-                            <span>
-                              <strong>{isUploading ? 'Sending image...' : isCompressing ? 'Compressing...' : 'Image ready'}</strong>
-                              {!isCompressing && (
-                                <span style={{ fontSize: '0.75rem', opacity: 0.7, marginLeft: '0.5rem' }}>
-                                  {compressionMode === 'compressed' && originalFileSize !== compressedFileSize
-                                    ? `${formatFileSize(originalFileSize)} → ${formatFileSize(compressedFileSize)} (${Math.round((1 - compressedFileSize / originalFileSize) * 100)}% saved)`
-                                    : formatFileSize(compressedFileSize)
-                                  }
-                                </span>
-                              )}
-                            </span>
-                          )}
                         </span>
                       </div>
-                      <button onClick={cancelAction} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', border: 'none' }}>Cancel</button>
+                      <button type="button" onClick={cancelAction} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', border: 'none' }}>Cancel</button>
                     </div>
-                    {/* Compression mode toggle - only show when image is selected */}
-                    {imagePreview && !replyingTo && !editingMessage && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingLeft: '0.25rem' }}>
+                    {/* Compression mode toggle */}
+                    {selectedAttachments.some(a => a.type === 'image') && !replyingTo && !editingMessage && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingLeft: '0.25rem', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginRight: '0.25rem' }}>Quality:</span>
                         <button
                           type="button"
@@ -997,6 +1504,19 @@ function ChatRoom() {
                         >
                           🔥 Full HD
                         </button>
+                        {(() => {
+                          const imageAttachments = selectedAttachments.filter(a => a.type === 'image');
+                          const totalOriginal = imageAttachments.reduce((acc, a) => acc + (a.originalSize || 0), 0);
+                          const totalCompressed = imageAttachments.reduce((acc, a) => acc + (a.compressedSize || a.originalSize || 0), 0);
+                          return !isCompressing && imageAttachments.length > 0 && (
+                            <span style={{ fontSize: '0.75rem', opacity: 0.7, marginLeft: '0.5rem' }}>
+                              {compressionMode === 'compressed' && totalOriginal !== totalCompressed
+                                ? `${formatFileSize(totalOriginal)} → ${formatFileSize(totalCompressed)} (${Math.round((1 - totalCompressed / totalOriginal) * 100)}% saved)`
+                                : formatFileSize(totalCompressed)
+                              }
+                            </span>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1005,23 +1525,61 @@ function ChatRoom() {
                   <input 
                     type="file" 
                     accept="image/*" 
+                    multiple
                     ref={fileInputRef} 
                     style={{ display: 'none' }} 
                     onChange={handleImageChange} 
                   />
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary" 
-                    style={{ padding: '0.5rem', height: '42px', width: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    onClick={() => fileInputRef.current.click()}
-                    disabled={isUploading}
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                      <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                      <polyline points="21 15 16 10 5 21"></polyline>
-                    </svg>
-                  </button>
+                  {canAttachFile && (
+                    <input
+                      type="file"
+                      multiple
+                      ref={fileAttachmentRef}
+                      style={{ display: 'none' }}
+                      onChange={handleFileChange}
+                      accept="*/*"
+                    />
+                  )}
+                  <div className={`attach-icons-wrapper ${(inputMessage && inputMessage.length > 0) ? 'hide-if-typing' : ''}`}>
+                    {canShareMedia && (
+                      <button 
+                        type="button" 
+                        className="btn btn-secondary" 
+                        style={{ padding: '0.5rem', height: '42px', width: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                        onClick={() => fileInputRef.current.click()}
+                        disabled={isUploading}
+                        title="Upload Image"
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                          <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                          <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                      </button>
+                    )}
+                    {canAttachFile && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0.5rem', height: '42px', width: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                        onClick={() => {
+                          if (fileAttachmentRef.current) {
+                            fileAttachmentRef.current.click();
+                          } else {
+                            console.error('File attachment ref is null');
+                            setFileUploadError('File picker failed to load');
+                          }
+                        }}
+                        disabled={isUploading}
+                        title={canUseUnrestrictedUpload ? "Attach any safe file" : "Attach verified file"}
+                      >
+                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M7.5 12.5l5.8-5.8a3.4 3.4 0 0 1 4.8 4.8l-7.2 7.2a5 5 0 0 1-7.1-7.1l7.5-7.5" />
+                          <path d="M9.6 14.6l6.4-6.4" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                   <textarea 
                     ref={inputRef}
                     className="input-field" 
@@ -1037,6 +1595,9 @@ function ChatRoom() {
                           localStorage.setItem(`draft_${user?.id}_${friendId}`, val);
                         }
                       }
+                      
+                      e.target.style.height = '42px';
+                      e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
                     }}
                     onKeyDown={handleKeyDown}
                     style={{ 
@@ -1048,12 +1609,22 @@ function ChatRoom() {
                       resize: 'none', 
                       padding: '0.65rem 0.9rem',
                       lineHeight: '1.4',
-                      overflowY: inputMessage.length > 100 ? 'auto' : 'hidden'
+                      overflowY: 'auto',
+                      transition: 'height 0.1s ease-out'
                     }}
                     disabled={userState.includes('pending') && sentCount >= 10}
                   />
-                  <button type="submit" className="btn" style={{ padding: '0.65rem 1.25rem', height: '42px' }} disabled={userState.includes('pending') && sentCount >= 10}>
-                    {editingMessage ? 'Save' : 'Send'}
+                  <button type="submit" className="btn" style={{ padding: '0', width: '42px', height: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', flexShrink: 0 }} disabled={userState.includes('pending') && sentCount >= 10} title={editingMessage ? 'Save Custom Edit' : 'Send Message'}>
+                    {editingMessage ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: 'translate(-1px, 1px) rotate(45deg)' }}>
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    )}
                   </button>
                 </form>
              </div>

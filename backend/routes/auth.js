@@ -34,7 +34,7 @@ router.post('/register', async (req, res) => {
     const payload = { user: { id: user.id, username: user.username, role } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token, user: { id: user.id, username: user.username, role, autoLogoutEnabled: user.autoLogoutEnabled } });
+      res.json({ token, user: { id: user.id, username: user.username, role, autoLogoutEnabled: user.autoLogoutEnabled, firstName: user.firstName, lastName: user.lastName, profilePic: user.profilePic, bio: user.bio, isProfileSetup: user.isProfileSetup } });
     });
   } catch (err) {
     console.error('Registration Error:', err.message);
@@ -95,7 +95,7 @@ router.post('/login', async (req, res) => {
     const payload = { user: { id: user.id, username: user.username, role: user.role || 'user' } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token, user: { id: user.id, username: user.username, role: user.role || 'user', autoLogoutEnabled: user.autoLogoutEnabled } });
+      res.json({ token, user: { id: user.id, username: user.username, role: user.role || 'user', autoLogoutEnabled: user.autoLogoutEnabled, firstName: user.firstName, lastName: user.lastName, profilePic: user.profilePic, bio: user.bio, isProfileSetup: user.isProfileSetup } });
     });
   } catch (err) {
     console.error('Login Error:', err.message);

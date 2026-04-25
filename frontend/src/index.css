@@ -71,6 +71,8 @@ body {
   background-image: radial-gradient(circle at top left, #1a202c, #0d1117);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #root {
@@ -305,6 +307,8 @@ body {
   border-radius: 12px;
   animation: slideIn 0.3s ease;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message.self {
@@ -452,6 +456,23 @@ body {
     padding: 0.5rem 0.3rem;
     border-radius: 12px 12px 0 0;
   }
+  
+  .attach-icons-wrapper.hide-if-typing {
+    max-width: 0 !important;
+    opacity: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+  }
+}
+
+.attach-icons-wrapper {
+  display: flex;
+  gap: 0.75rem;
+  overflow: hidden;
+  max-width: 200px;
+  opacity: 1;
+  transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ===== ADMIN DASHBOARD ===== */
@@ -484,4 +505,60 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* ===== ADMIN SETTINGS BUTTONS ===== */
+.admin-setting-row {
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
 
+.admin-setting-row:hover {
+  background: rgba(255, 255, 255, 0.03) !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset;
+}
+
+/* Toggle switch button */
+.admin-toggle-btn {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.3s ease !important;
+}
+
+.admin-toggle-btn:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.admin-toggle-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* Bulk Enable All button */
+.admin-bulk-enable {
+  transition: all 0.2s ease !important;
+}
+
+.admin-bulk-enable:hover {
+  background: rgba(46, 160, 67, 0.25) !important;
+  border-color: rgba(46, 160, 67, 0.7) !important;
+  box-shadow: 0 0 10px rgba(46, 160, 67, 0.25);
+  transform: translateY(-1px);
+}
+
+.admin-bulk-enable:active {
+  transform: scale(0.96) translateY(0);
+  background: rgba(46, 160, 67, 0.4) !important;
+}
+
+/* Bulk Disable All button */
+.admin-bulk-disable {
+  transition: all 0.2s ease !important;
+}
+
+.admin-bulk-disable:hover {
+  background: rgba(248, 81, 73, 0.2) !important;
+  border-color: rgba(248, 81, 73, 0.7) !important;
+  box-shadow: 0 0 10px rgba(248, 81, 73, 0.2);
+  transform: translateY(-1px);
+}
+
+.admin-bulk-disable:active {
+  transform: scale(0.96) translateY(0);
+  background: rgba(248, 81, 73, 0.35) !important;
+}

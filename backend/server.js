@@ -100,6 +100,10 @@ io.on('connection', (socket) => {
     io.emit('online_users', uniqueUsers);
   });
 
+  socket.on('user_unblocked', (data) => {
+    io.to(data.unblockedId).emit('friend_unblocked_you', data.userId);
+  });
+
   socket.on('send_message', async (data) => {
     try {
       const User = require('./models/User');
@@ -136,6 +140,9 @@ io.on('connection', (socket) => {
         receiver: data.receiverId,
         text: data.text || '',
         imageUrl: data.imageUrl || null,
+        imageUrls: data.imageUrls || [],
+        file: data.file || null,
+        files: data.files || [],
         replyTo: data.replyTo || null
       });
       await newMessage.save();
@@ -156,9 +163,18 @@ io.on('connection', (socket) => {
       const isOnline = Array.from(onlineUsers.values()).some(u => u.userId === data.receiverId);
       if (!isOnline && receiverObj.pushSubscription) {
         try {
+          let notificationText = populatedMsg.text;
+          if (!notificationText && populatedMsg.file) {
+            notificationText = `Sent file: ${populatedMsg.file.fileName}`;
+          } else if (!notificationText && populatedMsg.imageUrl) {
+            notificationText = 'Sent an image';
+          } else if (!notificationText) {
+            notificationText = 'Sent a message';
+          }
+
           const payload = JSON.stringify({
             title: `New message from ${populatedMsg.sender.username}`,
-            body: populatedMsg.text.length > 30 ? populatedMsg.text.substring(0, 30) + '...' : populatedMsg.text,
+            body: notificationText.length > 30 ? notificationText.substring(0, 30) + '...' : notificationText,
             url: `/chat/${data.senderId}`
           });
           await webPush.sendNotification(receiverObj.pushSubscription, payload);
