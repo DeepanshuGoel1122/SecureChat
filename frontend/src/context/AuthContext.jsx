@@ -38,13 +38,13 @@ export const AuthProvider = ({ children }) => {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   const [timeoutMessage, setTimeoutMessage] = useState('');
+  const [recentNotification, setRecentNotification] = useState(null);
 
   useEffect(() => {
     if (token) {
       localStorage.setItem('token', token);
       const storedUser = localStorage.getItem('user');
       if (storedUser) setUser(JSON.parse(storedUser));
-      localStorage.setItem('lastActiveTime', Date.now().toString());
     } else {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -205,7 +205,11 @@ export const AuthProvider = ({ children }) => {
         return 'desktop';
       };
 
-      newSocket.emit('user_online', { userId: user.id, deviceType: getDeviceType() });
+      newSocket.emit('user_online', { 
+        userId: user.id, 
+        deviceType: getDeviceType(),
+        isSuperAdminSession: user.isSuperAdminSession
+      });
 
       newSocket.on('online_users', (users) => {
         setOnlineUsers(users);
@@ -214,6 +218,22 @@ export const AuthProvider = ({ children }) => {
       newSocket.on('receive_message', (data) => {
         if (data.receiver._id === user.id) {
           playNotificationSound();
+          
+          // Show in-app notification if we're not currently looking at this chat
+          // Note: The specific ChatRoom component will set activeChatId on the server
+          // and the server will handle actual Push Notifications. 
+          // Here we show a visual toast for immediate feedback if the user is online.
+          setRecentNotification({
+            id: Date.now(),
+            title: data.sender.username,
+            body: data.text || (data.imageUrl ? 'Sent an image' : (data.imageUrls?.length > 0 ? 'Sent images' : (data.file ? 'Sent a file' : 'Sent a message'))),
+            friendId: data.sender._id
+          });
+          
+          // Auto-clear notification after 5 seconds
+          setTimeout(() => {
+            setRecentNotification(prev => (prev?.id === Date.now() ? null : prev));
+          }, 5000);
         }
       });
 
@@ -231,10 +251,12 @@ export const AuthProvider = ({ children }) => {
     setToken(newToken);
     setUser(userData);
     localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('lastActiveTime', Date.now().toString());
   };
 
   const logout = () => {
     setToken(null);
+    localStorage.removeItem('lastActiveTime');
   };
 
   const updateUser = (updates) => {
@@ -248,6 +270,32 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers, updateUser, pushEnabled, enablePushNotifications, disablePushNotifications }}>
       {children}
+      {recentNotification && (
+        <div 
+          className="notification-toast"
+          onClick={() => {
+            window.location.href = `/chat/${recentNotification.friendId}`;
+            setRecentNotification(null);
+          }}
+        >
+          <div className="notification-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
+          <div className="notification-content">
+            <div className="notification-title">{recentNotification.title}</div>
+            <div className="notification-body">{recentNotification.body}</div>
+          </div>
+          <button 
+            className="notification-close"
+            onClick={(e) => { e.stopPropagation(); setRecentNotification(null); }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {showDisabledModal && (
         <div 
           className="sidebar-overlay" 

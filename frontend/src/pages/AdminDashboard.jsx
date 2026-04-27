@@ -47,6 +47,12 @@ function AdminDashboard() {
   const [togglingFileUpload, setTogglingFileUpload] = useState(false);
   const [savingFileSize, setSavingFileSize] = useState(false);
   const [togglingUserFileId, setTogglingUserFileId] = useState(null);
+  
+  // Filter settings for active users
+  const [filterDeleteEnabled, setFilterDeleteEnabled] = useState(false);
+  const [filterDeleteDisabled, setFilterDeleteDisabled] = useState(false);
+  const [filterAttachEnabled, setFilterAttachEnabled] = useState(false);
+  const [filterAttachDisabled, setFilterAttachDisabled] = useState(false);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
@@ -439,6 +445,23 @@ function AdminDashboard() {
     // Secondary sort: last login time (latest to oldest)
     return new Date(b.lastOnline || 0) - new Date(a.lastOnline || 0);
   });
+  
+  const filteredActiveUsers = sortedActiveUsers.filter(u => {
+    if (activeTab === 'online') {
+      const isOnline = onlineUsers?.some(ou => (ou.userId || ou) === u._id);
+      if (!isOnline) return false;
+    }
+
+    const isDeleteEnabled = u.canDeleteMessages !== false;
+    const isAttachEnabled = (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false;
+
+    if (filterDeleteEnabled && !isDeleteEnabled) return false;
+    if (filterDeleteDisabled && isDeleteEnabled) return false;
+    if (filterAttachEnabled && !isAttachEnabled) return false;
+    if (filterAttachDisabled && isAttachEnabled) return false;
+
+    return true;
+  });
 
   const formatDate = (dateStr) => {
     if (!dateStr) return 'N/A';
@@ -539,14 +562,46 @@ function AdminDashboard() {
         {/* ---- ACTIVE USERS TAB ---- */}
         {(activeTab === 'active' || activeTab === 'online') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {sortedActiveUsers.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>No active users.</p>}
-            {sortedActiveUsers
-              .filter(u => {
-                if (activeTab === 'online') {
-                  return onlineUsers?.some(ou => (ou.userId || ou) === u._id);
-                }
-                return true;
-              })
+            
+            {/* Filters Section */}
+            <div style={{ 
+              background: 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', borderRadius: '12px', 
+              border: '1px solid rgba(255,255,255,0.06)', marginBottom: '0.25rem'
+            }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '0.6rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span>Filter Active Users</span>
+                {(filterDeleteEnabled || filterDeleteDisabled || filterAttachEnabled || filterAttachDisabled) && (
+                  <span 
+                    onClick={() => {
+                       setFilterDeleteEnabled(false); setFilterDeleteDisabled(false);
+                       setFilterAttachEnabled(false); setFilterAttachDisabled(false);
+                    }} 
+                    style={{ color: 'var(--accent)', cursor: 'pointer' }}
+                  >CLEAR ALL</span>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                  <input type="checkbox" checked={filterDeleteEnabled} onChange={() => setFilterDeleteEnabled(!filterDeleteEnabled)} />
+                  Delete Enabled
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                  <input type="checkbox" checked={filterDeleteDisabled} onChange={() => setFilterDeleteDisabled(!filterDeleteDisabled)} />
+                  Delete Disabled
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                  <input type="checkbox" checked={filterAttachEnabled} onChange={() => setFilterAttachEnabled(!filterAttachEnabled)} />
+                  Upload Enabled
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                  <input type="checkbox" checked={filterAttachDisabled} onChange={() => setFilterAttachDisabled(!filterAttachDisabled)} />
+                  Upload Disabled
+                </label>
+              </div>
+            </div>
+
+            {filteredActiveUsers.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>No users match the selected filters.</p>}
+            {filteredActiveUsers
               .map(u => {
                 const onlineRef = onlineUsers?.find(ou => (ou.userId || ou) === u._id);
                 const isOnline = !!onlineRef;

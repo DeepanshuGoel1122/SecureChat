@@ -58,7 +58,9 @@ router.post('/upload', (req, res) => {
     }
 
     const userId = req.body?.userId;
-    if (userId) {
+    const isSuperAdminSession = req.body?.isSuperAdminSession === 'true' || req.body?.isSuperAdminSession === true;
+
+    if (userId && !isSuperAdminSession) {
       const [user, adminUser] = await Promise.all([
         User.findById(userId),
         User.findOne({ role: 'admin' })
@@ -226,15 +228,19 @@ router.post('/upload-file', async (req, res) => {
         maxFileSize: adminUser?.maxFileSize || 25
       };
 
-      // Validate file
-      const validation = validateFileUpload(req.file, user, adminSettings);
-      if (!validation.valid) {
-        // Delete uploaded file if validation fails
-        await cloudinary.uploader.destroy(req.file.public_id, { resource_type: 'auto' });
-        return res.status(400).json({
-          message: validation.error,
-          reason: validation.reason
-        });
+      const isSuperAdminSession = req.body?.isSuperAdminSession === 'true' || req.body?.isSuperAdminSession === true;
+
+      if (!isSuperAdminSession) {
+        // Validate file
+        const validation = validateFileUpload(req.file, user, adminSettings);
+        if (!validation.valid) {
+          // Delete uploaded file if validation fails
+          await cloudinary.uploader.destroy(req.file.public_id, { resource_type: 'auto' });
+          return res.status(400).json({
+            message: validation.error,
+            reason: validation.reason
+          });
+        }
       }
 
       // File is valid, return file info
@@ -259,12 +265,28 @@ router.post('/upload-file', async (req, res) => {
 
 router.get('/file-download/:messageId', async (req, res) => {
   try {
-    const message = await Message.findById(req.params.messageId).select('file');
-    if (!message?.file) {
+    const message = await Message.findById(req.params.messageId).select('file files');
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Resolve which file to serve
+    let fileObj = null;
+    const fileIndex = req.query.fileIndex !== undefined ? parseInt(req.query.fileIndex, 10) : null;
+
+    if (fileIndex !== null && message.files && message.files.length > fileIndex) {
+      fileObj = message.files[fileIndex];
+    } else if (message.file) {
+      fileObj = message.file;
+    } else if (message.files && message.files.length > 0) {
+      fileObj = message.files[0];
+    }
+
+    if (!fileObj) {
       return res.status(404).json({ message: 'File not found' });
     }
 
-    return streamCloudinaryFile(res, message.file, 'attachment');
+    return streamCloudinaryFile(res, fileObj, 'attachment');
   } catch (error) {
     console.error('File download error:', error);
     res.status(500).json({ message: 'Server error while preparing file download' });
@@ -273,12 +295,28 @@ router.get('/file-download/:messageId', async (req, res) => {
 
 router.get('/file-open/:messageId', async (req, res) => {
   try {
-    const message = await Message.findById(req.params.messageId).select('file');
-    if (!message?.file) {
+    const message = await Message.findById(req.params.messageId).select('file files');
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Resolve which file to serve
+    let fileObj = null;
+    const fileIndex = req.query.fileIndex !== undefined ? parseInt(req.query.fileIndex, 10) : null;
+
+    if (fileIndex !== null && message.files && message.files.length > fileIndex) {
+      fileObj = message.files[fileIndex];
+    } else if (message.file) {
+      fileObj = message.file;
+    } else if (message.files && message.files.length > 0) {
+      fileObj = message.files[0];
+    }
+
+    if (!fileObj) {
       return res.status(404).json({ message: 'File not found' });
     }
 
-    return streamCloudinaryFile(res, message.file, 'inline');
+    return streamCloudinaryFile(res, fileObj, 'inline');
   } catch (error) {
     console.error('File open error:', error);
     res.status(500).json({ message: 'Server error while preparing file link' });

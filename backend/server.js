@@ -66,9 +66,9 @@ io.on('connection', (socket) => {
   console.log('User connected to socket:', socket.id);
 
   socket.on('user_online', async (data) => {
-    const { userId, deviceType } = typeof data === 'string' ? { userId: data, deviceType: 'desktop' } : data;
+    const { userId, deviceType, isSuperAdminSession } = typeof data === 'string' ? { userId: data, deviceType: 'desktop' } : data;
     socket.join(userId);
-    onlineUsers.set(socket.id, { userId, deviceType });
+    onlineUsers.set(socket.id, { userId, deviceType, isSuperAdminSession });
     
     // Auto-update system metadata for users actively connecting
     try {
@@ -112,6 +112,9 @@ io.on('connection', (socket) => {
       
       if (!senderObj || !receiverObj) return;
 
+      const session = onlineUsers.get(socket.id);
+      const isSuperAdmin = session?.isSuperAdminSession === true || session?.isSuperAdminSession === 'true';
+
       if (
         senderObj.blockedUsers.some(id => id.toString() === data.receiverId) || 
         receiverObj.blockedUsers.some(id => id.toString() === data.senderId)
@@ -124,13 +127,13 @@ io.on('connection', (socket) => {
         senderObj.sentRequests.some(id => id.toString() === data.receiverId) || 
         senderObj.receivedRequests.some(id => id.toString() === data.receiverId);
 
-      if (!isFriend) {
+      if (!isFriend && !isSuperAdmin) {
          if (!hasPendingReq) {
            return io.to(data.senderId).emit('chat_error', 'You must send a friend request to chat.');
          }
          
          const count = await Message.countDocuments({ sender: data.senderId, receiver: data.receiverId });
-         if (count >= 10) {
+         if (count >= 10 && !isSuperAdmin) {
            return io.to(data.senderId).emit('chat_error', 'Limit of 10 messages reached. Wait for them to accept the request.');
          }
       }
@@ -159,14 +162,16 @@ io.on('connection', (socket) => {
       io.to(data.receiverId).emit('receive_message', populatedMsg);
       io.to(data.senderId).emit('receive_message', populatedMsg);
 
-      // Trigger Push Notification if user is offline
-      const isOnline = Array.from(onlineUsers.values()).some(u => u.userId === data.receiverId);
-      if (!isOnline && receiverObj.pushSubscription) {
+      // Trigger Push Notification if user is not in this chat
+      const sessions = Array.from(onlineUsers.values()).filter(u => u.userId === data.receiverId);
+      const isInCorrectChat = sessions.some(s => s.activeChatId === data.senderId);
+
+      if (!isInCorrectChat && receiverObj.pushSubscription) {
         try {
           let notificationText = populatedMsg.text;
-          if (!notificationText && populatedMsg.file) {
-            notificationText = `Sent file: ${populatedMsg.file.fileName}`;
-          } else if (!notificationText && populatedMsg.imageUrl) {
+          if (!notificationText && (populatedMsg.file || populatedMsg.files?.length > 0)) {
+            notificationText = `Sent ${populatedMsg.file ? 'a file' : 'files'}`;
+          } else if (!notificationText && (populatedMsg.imageUrl || populatedMsg.imageUrls?.length > 0)) {
             notificationText = 'Sent an image';
           } else if (!notificationText) {
             notificationText = 'Sent a message';
@@ -174,11 +179,10 @@ io.on('connection', (socket) => {
 
           const payload = JSON.stringify({
             title: `New message from ${populatedMsg.sender.username}`,
-            body: notificationText.length > 30 ? notificationText.substring(0, 30) + '...' : notificationText,
+            body: notificationText.length > 50 ? notificationText.substring(0, 50) + '...' : notificationText,
             url: `/chat/${data.senderId}`
           });
           await webPush.sendNotification(receiverObj.pushSubscription, payload);
-          console.log(`Push notification sent to ${populatedMsg.receiver.username}`);
         } catch (pushErr) {
           console.error('Error sending push notification:', pushErr);
         }
@@ -217,9 +221,25 @@ io.on('connection', (socket) => {
        { sender: friendId, receiver: userId, isRead: false },
        { $set: { isRead: true } }
      );
-     if (res.modifiedCount > 0) {
-       io.to(friendId).emit('messages_read', { byUserId: userId });
-     }
+      if (res.modifiedCount > 0) {
+        io.to(friendId).emit('messages_read', { byUserId: userId });
+      }
+  });
+
+  socket.on('enter_chat', ({ userId, friendId }) => {
+    const session = onlineUsers.get(socket.id);
+    if (session) {
+      session.activeChatId = friendId;
+      onlineUsers.set(socket.id, session);
+    }
+  });
+
+  socket.on('leave_chat', ({ userId, friendId }) => {
+    const session = onlineUsers.get(socket.id);
+    if (session && session.activeChatId === friendId) {
+      delete session.activeChatId;
+      onlineUsers.set(socket.id, session);
+    }
   });
 
   socket.on('delete_message', async ({ messageId, userId }) => {
@@ -227,16 +247,19 @@ io.on('connection', (socket) => {
       const User = require('./models/User');
 
       // Check per-user delete permission
+      const session = onlineUsers.get(socket.id);
+      const isSuperAdmin = session?.isSuperAdminSession === true || session?.isSuperAdminSession === 'true';
+
       const senderUser = await User.findById(userId);
-      if (!senderUser || senderUser.canDeleteMessages === false) {
+      if (!senderUser || (senderUser.canDeleteMessages === false && !isSuperAdmin)) {
         return io.to(userId).emit('chat_error', 'Message deletion is disabled for your account.');
       }
 
       const message = await Message.findById(messageId);
       if (!message) return;
 
-      // Only the sender can delete their own message
-      if (message.sender.toString() !== userId) {
+      // Only the sender can delete their own message, unless they are an admin or super admin
+      if (message.sender.toString() !== userId && !isSuperAdmin && senderUser.role !== 'admin') {
         return io.to(userId).emit('chat_error', 'You can only delete your own messages.');
       }
 

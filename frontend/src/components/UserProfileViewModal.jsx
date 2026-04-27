@@ -38,7 +38,7 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
         {images.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '1rem' }}>
             {images.map((url, i) => (
-              <div key={i} style={{ borderRadius: '8px', overflow: 'hidden', height: '80px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => sharedMedia?.openImageGallery && sharedMedia.openImageGallery(url)}>
+              <div key={i} style={{ borderRadius: '8px', overflow: 'hidden', height: '80px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => sharedMedia?.openImageGallery && sharedMedia.openImageGallery(url, images)}>
                 <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Media" />
               </div>
             ))}

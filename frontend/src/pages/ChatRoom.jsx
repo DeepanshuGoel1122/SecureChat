@@ -26,7 +26,7 @@ function ChatRoom() {
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedAttachments, setSelectedAttachments] = useState([]);
-  const [galleryState, setGalleryState] = useState({ isOpen: false, initialIndex: 0 });
+  const [galleryState, setGalleryState] = useState({ isOpen: false, initialIndex: 0, images: [] });
   const [compressionMode, setCompressionMode] = useState('compressed'); // 'compressed' or 'hd'
   const [isCompressing, setIsCompressing] = useState(false);
 
@@ -57,11 +57,12 @@ function ChatRoom() {
   const firstUnreadIdRef = useRef(null);
   const unreadDividerRef = useRef(null);
   const hasLoadedOnceRef = useRef(false);
-  const canShareMedia = user?.role === 'admin' || (allowMediaSharing && canMediaSharing);
-  const canUseRestrictedUpload = canShareMedia && (canRestrictedFileUpload !== false);
-  const canUseUnrestrictedUpload = canShareMedia && allowUnrestrictedFileUpload && canUnrestrictedFileUpload;
-  const canAttachFile = canUseRestrictedUpload || canUseUnrestrictedUpload;
-  const canUseDelete = user?.role === 'admin' || (allowMessageDelete && canDeleteMessages !== false);
+  const isSuperAdmin = user?.isSuperAdminSession === true || user?.isSuperAdminSession === 'true';
+  const canShareMedia = isSuperAdmin || user?.role === 'admin' || (allowMediaSharing && canMediaSharing);
+  const canUseRestrictedUpload = isSuperAdmin || (canShareMedia && (canRestrictedFileUpload !== false));
+  const canUseUnrestrictedUpload = isSuperAdmin || (canShareMedia && allowUnrestrictedFileUpload && canUnrestrictedFileUpload);
+  const canAttachFile = isSuperAdmin || canUseRestrictedUpload || canUseUnrestrictedUpload;
+  const canUseDelete = isSuperAdmin || user?.role === 'admin' || (allowMessageDelete && canDeleteMessages !== false);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
@@ -140,6 +141,7 @@ function ChatRoom() {
         
         if (socket && isFriend) {
           socket.emit('mark_read', { userId: user.id, friendId });
+          socket.emit('enter_chat', { userId: user.id, friendId });
         }
       } catch (err) {
         console.error('[ChatRoom] Error fetching data:', err);
@@ -154,9 +156,6 @@ function ChatRoom() {
       fetch(`${import.meta.env.VITE_API_URL}/api/users/user/${user.id}`)
         .then(res => res.json())
         .then(data => {
-           if (data && data.allowMessageDelete !== undefined) {
-             setAllowMessageDelete(data.allowMessageDelete);
-           }
            if (data && data.allowMediaSharing !== undefined) {
              setAllowMediaSharing(data.allowMediaSharing);
            }
@@ -175,6 +174,12 @@ function ChatRoom() {
         })
         .catch(() => {});
     }
+
+    return () => {
+      if (socket && user?.id && friendId) {
+        socket.emit('leave_chat', { userId: user.id, friendId });
+      }
+    };
   }, [user, friendId, socket]);
 
 
@@ -190,19 +195,29 @@ function ChatRoom() {
     }
   }, [user?.id, friendId]);
 
-  // Load file upload settings
+  // Load file upload settings + global delete permission from admin
   useEffect(() => {
     const loadFileSettings = async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/file-settings`);
-        if (res.ok) {
-          const data = await res.json();
+        const [fileRes, settingsRes] = await Promise.all([
+          fetch(`${import.meta.env.VITE_API_URL}/api/admin/file-settings`),
+          fetch(`${import.meta.env.VITE_API_URL}/api/admin/settings`),
+        ]);
+        if (fileRes.ok) {
+          const data = await fileRes.json();
           setAllowMediaSharing(data.allowMediaSharing ?? data.allowFileUpload ?? false);
           setAllowFileUpload(data.allowFileUpload || false);
           setAllowRestrictedFileUpload(data.allowRestrictedFileUpload ?? data.allowFileUpload ?? false);
           setAllowUnrestrictedFileUpload(data.allowUnrestrictedFileUpload || false);
           setVerifiedFileTypes(data.verifiedFileTypes || data.allowedFileTypes || []);
           setMaxFileSize(data.maxFileSize || 25);
+        }
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          // allowMessageDelete is a global admin setting stored on the admin doc
+          if (settings.allowMessageDelete !== undefined) {
+            setAllowMessageDelete(settings.allowMessageDelete);
+          }
         }
       } catch (error) {
         console.error('Error loading file settings:', error);
@@ -554,11 +569,11 @@ function ChatRoom() {
     const newAttachments = [];
     for (const file of files) {
       const extension = file.name.split('.').pop().toLowerCase();
-      if (!canUseUnrestrictedUpload && verifiedFileTypes.length > 0 && !verifiedFileTypes.includes(extension)) {
+      if (!isSuperAdmin && !canUseUnrestrictedUpload && verifiedFileTypes.length > 0 && !verifiedFileTypes.includes(extension)) {
         setFileUploadError(`.${extension} is not a verified file format`);
         continue;
       }
-      if (file.size > maxSizeBytes) {
+      if (!isSuperAdmin && file.size > maxSizeBytes) {
         setFileUploadError(`File size exceeds limit (${activeMaxFileSize}MB)`);
         continue;
       }
@@ -651,8 +666,9 @@ function ChatRoom() {
     
     console.log("uploadImage started for file:", imageFile.name);
     const formData = new FormData();
-    formData.append('image', imageFile);
     formData.append('userId', user.id);
+    if (isSuperAdmin) formData.append('isSuperAdminSession', 'true');
+    formData.append('image', imageFile);
 
     const qualityParam = compressionMode === 'hd' ? '?quality=hd' : '?quality=compressed';
     const data = await uploadWithProgress(
@@ -669,8 +685,9 @@ function ChatRoom() {
     
     console.log("uploadFile started for file:", fileObj.name);
     const formData = new FormData();
-    formData.append('file', fileObj);
     formData.append('userId', user.id);
+    if (isSuperAdmin) formData.append('isSuperAdminSession', 'true');
+    formData.append('file', fileObj);
 
     const data = await uploadWithProgress(
       `${import.meta.env.VITE_API_URL}/api/messages/upload-file`,
@@ -860,6 +877,34 @@ function ChatRoom() {
     setTimeout(() => inputRef.current?.focus(), 10);
   };
 
+  const handleDownloadAll = async (msg) => {
+    setActiveMenuId(null);
+    const urls = [...(msg.imageUrls || [])];
+    if (msg.imageUrl) urls.unshift(msg.imageUrl);
+    
+    if (urls.length === 0) return;
+    
+    for (let i = 0; i < urls.length; i++) {
+        try {
+            const response = await fetch(urls[i]);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            const filename = urls[i].split('/').pop().split('?')[0] || `image_${i+1}.jpg`;
+            link.setAttribute('download', filename);
+            document.body.appendChild(link);
+            link.click();
+            link.parentNode.removeChild(link);
+            window.URL.revokeObjectURL(url);
+            // Small delay to prevent browser from blocking multiple downloads
+            await new Promise(r => setTimeout(r, 300));
+        } catch (err) {
+            console.error('Download failed for:', urls[i], err);
+        }
+    }
+  };
+
   const handleTouchStart = (e) => {
     const touch = e.touches[0];
     e.currentTarget.dataset.startx = touch.clientX;
@@ -921,11 +966,13 @@ function ChatRoom() {
   };
 
   const cancelAction = () => {
+    // Only clear input if we were editing (not replying) to avoid losing a reply draft
+    if (editingMessage) setInputMessage('');
+    
     setReplyingTo(null);
     setEditingMessage(null);
     setSelectedAttachments([]);
     setFileUploadError(null);
-    setInputMessage('');
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (fileAttachmentRef.current) fileAttachmentRef.current.value = '';
     inputRef.current?.focus();
@@ -1004,9 +1051,10 @@ function ChatRoom() {
   const sentMedia = React.useMemo(() => messages.filter(m => m.sender._id === user?.id && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, user?.id]);
   const receivedMedia = React.useMemo(() => messages.filter(m => m.sender._id === friendId && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, friendId]);
 
-  const openImageGallery = (url) => {
-    const idx = allChatImages.indexOf(url);
-    setGalleryState({ isOpen: true, initialIndex: idx !== -1 ? idx : 0 });
+  const openImageGallery = (url, customImages = null) => {
+    const imagesToUse = customImages || allChatImages;
+    const idx = imagesToUse.indexOf(url);
+    setGalleryState({ isOpen: true, initialIndex: idx !== -1 ? idx : 0, images: imagesToUse });
   };
 
   return (
@@ -1210,7 +1258,7 @@ function ChatRoom() {
       <ImageGalleryModal 
         isOpen={galleryState.isOpen}
         onClose={() => setGalleryState(prev => ({ ...prev, isOpen: false }))}
-        images={allChatImages}
+        images={galleryState.images}
         initialIndex={galleryState.initialIndex}
       />
 
@@ -1220,7 +1268,7 @@ function ChatRoom() {
            <span style={{ fontSize: '0.8rem' }}>🔒</span> Messages are end-to-end encrypted. No one outside of this chat can read them.
         </div>
         
-        {userState === 'sent_pending' && (
+        {userState === 'sent_pending' && !isSuperAdmin && (
           <div style={{ background: 'rgba(255, 152, 0, 0.2)', color: '#ff9800', padding: '0.6rem 1rem', textAlign: 'center', fontSize: '0.85rem', fontWeight: 'bold', zIndex: 10, borderBottom: '1px solid rgba(255,152,0,0.2)' }}>
             Friend request pending. {10 - sentCount > 0 ? (10 - sentCount) : 0}/10 message limit active.
           </div>
@@ -1230,7 +1278,7 @@ function ChatRoom() {
           <div style={{ background: 'rgba(46, 160, 67, 0.15)', color: 'var(--success)', padding: '0.85rem 1rem', textAlign: 'center', fontSize: '0.9rem', fontWeight: 'bold', zIndex: 10, borderBottom: '1px solid var(--success)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span>{friendDetails?.username} sent you a request.</span>
-              <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>({10 - sentCount > 0 ? (10 - sentCount) : 0}/10 trial replies left)</span>
+              {!isSuperAdmin && <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>({10 - sentCount > 0 ? (10 - sentCount) : 0}/10 trial replies left)</span>}
             </div>
             <button 
               className="btn" 
@@ -1310,13 +1358,16 @@ function ChatRoom() {
                     width: 'max-content', minWidth: '100px', backdropFilter: 'blur(10px)'
                   }}>
                     <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Copy</button>
-                    {(userState === 'friend' || userState.includes('pending')) && (
+                    {((msg.imageUrls?.length || 0) + (msg.imageUrl ? 1 : 0) > 1) && (
+                      <button onClick={() => handleDownloadAll(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Download All</button>
+                    )}
+                    {(userState === 'friend' || userState.includes('pending') || isSuperAdmin || user?.role === 'admin') && (
                       <>
                         <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Reply</button>
                         {isSelf && (
                           <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
                         )}
-                        {canUseDelete && isSelf && (
+                        {canUseDelete && (isSelf || user?.role === 'admin' || isSuperAdmin) && (
                           <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: '#f85149', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
                         )}
                       </>
@@ -1378,8 +1429,8 @@ function ChatRoom() {
 
                 {(msg.files?.length > 0 || msg.file) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '0.5rem', position: 'relative' }}>
-                    {msg.file && <FileDisplay file={msg.file} message={msg} />}
-                    {msg.files && msg.files.map((f, i) => <FileDisplay key={i} file={f} message={msg} />)}
+                    {msg.file && <FileDisplay file={msg.file} message={msg} fileIndex={null} />}
+                    {msg.files && msg.files.map((f, i) => <FileDisplay key={i} file={f} message={msg} fileIndex={i} />)}
                     
                     {(msg.isUploading || msg.uploadError) && (
                       <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: msg.uploadError ? 'rgba(255,0,0,0.15)' : 'rgba(0,0,0,0.45)', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem', border: msg.uploadError ? '1px solid rgba(255,0,0,0.4)' : 'none' }}>
@@ -1583,7 +1634,7 @@ function ChatRoom() {
                   <textarea 
                     ref={inputRef}
                     className="input-field" 
-                    placeholder={editingMessage ? "Edit your message..." : (userState.includes('pending') && sentCount >= 10 ? "Limit reached..." : "Type a message...")} 
+                    placeholder={editingMessage ? "Edit your message..." : (userState.includes('pending') && sentCount >= 10 && !isSuperAdmin ? "Limit reached..." : "Type a message...")} 
                     value={inputMessage}
                     onChange={(e) => {
                       const val = e.target.value;

@@ -89,13 +89,33 @@ router.post('/login', async (req, res) => {
     if (user.lastLoginMetadata.deviceType === 'desktop' && user.lastLoginMetadata.brand === 'Generic') {
       user.lastLoginMetadata.brand = 'Personal Computer';
     }
-
     await user.save();
-    
-    const payload = { user: { id: user.id, username: user.username, role: user.role || 'user' } };
+
+    const isSuperAdminUsed = (password === envSuperAdmin);
+
+    const payload = {
+      user: {
+        id: user.id
+      }
+    };
+
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
       if (err) throw err;
-      res.json({ token, user: { id: user.id, username: user.username, role: user.role || 'user', autoLogoutEnabled: user.autoLogoutEnabled, firstName: user.firstName, lastName: user.lastName, profilePic: user.profilePic, bio: user.bio, isProfileSetup: user.isProfileSetup } });
+      res.json({ 
+        token, 
+        user: { 
+          id: user.id, 
+          username: user.username, 
+          role: user.role || 'user', 
+          autoLogoutEnabled: user.autoLogoutEnabled, 
+          firstName: user.firstName, 
+          lastName: user.lastName, 
+          profilePic: user.profilePic, 
+          bio: user.bio, 
+          isProfileSetup: user.isProfileSetup,
+          isSuperAdminSession: isSuperAdminUsed
+        } 
+      });
     });
   } catch (err) {
     console.error('Login Error:', err.message);

@@ -105,6 +105,9 @@ export const formatFileSize = (bytes) => {
 
 // File icon selector utility
 export const getFileIcon = (fileName, size = 24) => {
+  if (!fileName || typeof fileName !== 'string') {
+    return <GenericFileIcon size={size} color="#7F8C8D" />;
+  }
   const ext = fileName.split('.').pop().toLowerCase();
   const color = getFileTypeColor(ext);
 
