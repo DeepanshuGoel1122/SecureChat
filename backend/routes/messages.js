@@ -7,6 +7,18 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const Message = require('../models/Message');
 const User = require('../models/User');
 const { validateFileUpload, formatFileSize } = require('../utils/fileValidator');
+const {
+  CACHE_TTL,
+  ROOM_MESSAGE_LIMIT,
+  cacheKey,
+  delKeys,
+  getJson,
+  getRoomMessages,
+  invalidateRoom,
+  invalidateUser,
+  pushRoomMessage,
+  setJson,
+} = require('../utils/cache');
 
 const router = express.Router();
 
@@ -324,36 +336,173 @@ router.get('/file-open/:messageId', async (req, res) => {
 });
 
 const ObjectId = mongoose.Types.ObjectId;
+const getClearedAt = (clearedChats, friendId) => {
+  if (!clearedChats) return new Date(0);
+  if (typeof clearedChats.get === 'function') return clearedChats.get(friendId) || new Date(0);
+  return clearedChats[friendId] || new Date(0);
+};
 
 // Get history
 router.get('/history/:userId/:friendId', async (req, res) => {
   try {
     const { userId, friendId } = req.params;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+    const before = req.query.before ? new Date(req.query.before) : null;
+    const wantsPagedResponse = req.query.paged === '1' || req.query.limit !== undefined || req.query.before !== undefined;
+    const requestKind = before ? 'older' : 'latest';
     
     // Fetch user to determine if they previously cleared this chat
-    const user = await User.findById(userId);
-    const clearedAt = user?.clearedChats?.get(friendId) || new Date(0);
+    const user = await User.findById(userId).select('clearedChats').lean();
+    const clearedAt = getClearedAt(user?.clearedChats, friendId);
 
-    const messages = await Message.find({
+    if (!before) {
+      const cachedMessages = await getRoomMessages(userId, friendId, limit, clearedAt);
+      if (cachedMessages) {
+        console.log(`[messages/history] ${requestKind} ${userId} <-> ${friendId}: REDIS cache hit (${cachedMessages.length} messages)`);
+        await Message.updateMany(
+          { sender: friendId, receiver: userId, isRead: false, createdAt: { $gt: clearedAt } },
+          { $set: { isRead: true } }
+        );
+
+        if (wantsPagedResponse) {
+          return res.json({
+            messages: cachedMessages,
+            hasMore: cachedMessages.length === limit,
+            nextBefore: cachedMessages[0]?.createdAt || null,
+            source: 'redis',
+          });
+        }
+
+        return res.json(cachedMessages);
+      }
+      console.log(`[messages/history] ${requestKind} ${userId} <-> ${friendId}: Redis miss; querying MongoDB`);
+    } else {
+      console.log(`[messages/history] ${requestKind} ${userId} <-> ${friendId}: pagination request; querying MongoDB before ${before.toISOString()}`);
+    }
+
+    const query = {
       $or: [
         { sender: userId, receiver: friendId },
         { sender: friendId, receiver: userId }
       ],
       createdAt: { $gt: clearedAt } // Filter out old messages asymmetrically
-    }).sort('createdAt').populate('sender', 'username').populate('receiver', 'username').populate({
+    };
+
+    if (before && !Number.isNaN(before.getTime())) {
+      query.createdAt.$lt = before;
+    }
+
+    const fetchedMessages = await Message.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate('sender', 'username')
+      .populate('receiver', 'username')
+      .populate({
       path: 'replyTo',
       select: 'text sender createdAt',
       populate: { path: 'sender', select: 'username' }
-    });
+      })
+      .lean();
+
+    const hasMore = fetchedMessages.length > limit;
+    const messages = fetchedMessages.slice(0, limit).reverse();
+    console.log(`[messages/history] ${requestKind} ${userId} <-> ${friendId}: MongoDB returned ${messages.length} messages (hasMore=${hasMore})`);
+    if (!before && messages.length) {
+      for (const message of messages) {
+        await pushRoomMessage(userId, friendId, message, ROOM_MESSAGE_LIMIT);
+      }
+      console.log(`[messages/history] latest ${userId} <-> ${friendId}: warmed Redis with ${messages.length} messages`);
+    }
     
     // Mark as read automatically when history is fetched
     await Message.updateMany(
       { sender: friendId, receiver: userId, isRead: false, createdAt: { $gt: clearedAt } },
       { $set: { isRead: true } }
     );
+    await delKeys([cacheKey('unread', userId)]);
+
+    if (wantsPagedResponse) {
+      return res.json({
+        messages,
+        hasMore,
+        nextBefore: messages[0]?.createdAt || null,
+        source: 'db',
+      });
+    }
     
     res.json(messages);
   } catch (err) {
+    console.error('History fetch error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get media history
+router.get('/media/:userId/:friendId', async (req, res) => {
+  try {
+    const { userId, friendId } = req.params;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+    const before = req.query.before ? new Date(req.query.before) : null;
+    
+    const mediaKey = cacheKey('media', userId, friendId, before ? before.getTime() : 'latest', limit);
+    const cachedMedia = await getJson(mediaKey);
+    if (cachedMedia) {
+      console.log(`[messages/media] ${userId} <-> ${friendId}: REDIS cache hit`);
+      return res.json(cachedMedia);
+    }
+    
+    const user = await User.findById(userId).select('clearedChats').lean();
+    const clearedAt = getClearedAt(user?.clearedChats, friendId);
+
+    const query = {
+      $and: [
+        {
+          $or: [
+            { sender: userId, receiver: friendId },
+            { sender: friendId, receiver: userId }
+          ]
+        },
+        {
+          $or: [
+            { imageUrl: { $exists: true, $type: 2 } }, // string
+            { 'imageUrls.0': { $exists: true } }, // array not empty
+            { file: { $exists: true, $type: 3 } }, // object
+            { 'files.0': { $exists: true } } // array not empty
+          ]
+        }
+      ],
+      createdAt: { $gt: clearedAt }
+    };
+
+    if (before && !Number.isNaN(before.getTime())) {
+      query.createdAt.$lt = before;
+    }
+
+    const fetchedMessages = await Message.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate('sender', 'username')
+      .populate('receiver', 'username')
+      .lean();
+
+    const hasMore = fetchedMessages.length > limit;
+    const messages = fetchedMessages.slice(0, limit).reverse();
+    
+    const sentMedia = messages.filter(m => m.sender._id.toString() === userId);
+    const receivedMedia = messages.filter(m => m.sender._id.toString() === friendId);
+    
+    const result = {
+        sent: sentMedia,
+        received: receivedMedia,
+        hasMore,
+        nextBefore: messages[0]?.createdAt || null
+    };
+    
+    await setJson(mediaKey, result, 5 * 60); // 5 mins cache
+    
+    res.json(result);
+  } catch (err) {
+    console.error('Media fetch error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -362,8 +511,17 @@ router.get('/history/:userId/:friendId', async (req, res) => {
 router.get('/unread/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    const unreadKey = cacheKey('unread', userId);
+    const cachedUnread = await getJson(unreadKey);
+    if (cachedUnread) {
+      console.log(`[messages/unread] ${userId}: REDIS cache hit`);
+      res.set('X-Cache-Source', 'redis');
+      return res.json(cachedUnread);
+    }
+
+    console.log(`[messages/unread] ${userId}: Redis miss; querying MongoDB`);
     
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select('clearedChats').lean();
     const clearedChatMap = user?.clearedChats;
 
     const unreadMessages = await Message.aggregate([
@@ -374,7 +532,7 @@ router.get('/unread/:userId', async (req, res) => {
     const unreadCounts = {};
     unreadMessages.forEach(group => {
       const friendIdStr = group._id.toString();
-      const clearedAt = clearedChatMap?.get(friendIdStr) || new Date(0);
+      const clearedAt = getClearedAt(clearedChatMap, friendIdStr);
       
       // Calculate how many unread messages are actually *after* the cleared timestamp
       const trueUnreadCount = group.msgs.filter(m => new Date(m.createdAt) > clearedAt).length;
@@ -383,6 +541,8 @@ router.get('/unread/:userId', async (req, res) => {
       }
     });
     
+    await setJson(unreadKey, unreadCounts, CACHE_TTL.UNREAD);
+    res.set('X-Cache-Source', 'db');
     res.json(unreadCounts);
   } catch (err) {
     console.error(err);
@@ -403,6 +563,12 @@ router.delete('/history/:userId/:friendId', async (req, res) => {
       user.clearedChats.set(friendId, new Date());
       await user.save();
     }
+
+    await Promise.all([
+      invalidateUser(userId),
+      invalidateRoom(userId, friendId),
+      delKeys([cacheKey('unread', userId)]),
+    ]);
 
     res.json({ message: 'Chat history cleared for user' });
   } catch (err) {

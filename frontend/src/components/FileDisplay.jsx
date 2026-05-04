@@ -35,17 +35,20 @@ const FileDisplay = ({ file, message, fileIndex }) => {
   const ext = fileExtension?.toLowerCase() || 'unknown';
   const color = getFileTypeColor(ext);
 
+  const isSender = message?.isSender; // Assuming `isSender` indicates if the message is from the sender
+
   return (
     <div
-      className="file-display"
+      className={`file-display ${isSender ? 'message self file' : ''}`}
       style={{
-        backgroundColor: 'rgba(' + hexToRgb(color).join(',') + ', 0.05)',
-        border: `1px solid ${color}20`,
-        borderRadius: '8px',
+        background: `linear-gradient(135deg, rgba(${hexToRgb(color).join(',')}, 0.15), rgba(${hexToRgb(color).join(',')}, 0.05))`,
+        border: `1px solid ${color}80`,
+        borderRadius: '12px',
         padding: '12px',
         maxWidth: '400px',
         marginTop: '8px',
-        transition: 'all 0.2s ease'
+        transition: 'all 0.2s ease',
+        boxShadow: `0 4px 12px rgba(0,0,0,0.1), 0 0 0 1px ${color}20`
       }}
     >
       {/* File Header */}
@@ -65,7 +68,7 @@ const FileDisplay = ({ file, message, fileIndex }) => {
             style={{
               fontWeight: '600',
               fontSize: '14px',
-              color: '#2C3E50',
+              color: 'inherit',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -78,7 +81,8 @@ const FileDisplay = ({ file, message, fileIndex }) => {
           <div
             style={{
               fontSize: '12px',
-              color: '#7F8C8D',
+              color: 'inherit',
+              opacity: 0.8,
               display: 'flex',
               gap: '8px'
             }}
@@ -106,15 +110,16 @@ const FileDisplay = ({ file, message, fileIndex }) => {
               alignItems: 'center',
               gap: '6px',
               padding: '6px 12px',
-              backgroundColor: `${color}20`,
+              backgroundColor: `${color}40`,
               color: color,
-              border: `1px solid ${color}40`,
+              border: `1px solid ${color}80`,
               borderRadius: '6px',
               cursor: 'pointer',
               fontSize: '12px',
-              fontWeight: '500',
+              fontWeight: '600',
               transition: 'all 0.2s ease',
-              backdropFilter: 'blur(10px)'
+              backdropFilter: 'blur(10px)',
+              boxShadow: `0 2px 4px ${color}30`
             }}
             onMouseEnter={(e) => {
               e.target.style.backgroundColor = `${color}30`;

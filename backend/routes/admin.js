@@ -4,8 +4,19 @@ const User = require('../models/User');
 const DeletedUsername = require('../models/DeletedUsername');
 const Message = require('../models/Message');
 const { VERIFIED_FILE_EXTENSIONS } = require('../utils/fileValidator');
+const { cacheKey, delPattern } = require('../utils/cache');
 
 const router = express.Router();
+
+router.use((req, res, next) => {
+  res.on('finish', () => {
+    if (req.method !== 'GET' && res.statusCode < 400) {
+      delPattern(cacheKey('user', '*')).catch(() => {});
+      delPattern(cacheKey('search', '*')).catch(() => {});
+    }
+  });
+  next();
+});
 
 // Get all users topology data
 router.get('/users', async (req, res) => {

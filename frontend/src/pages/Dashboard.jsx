@@ -3,6 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import ProfileEditModal from '../components/ProfileEditModal';
 import UserProfileViewModal from '../components/UserProfileViewModal';
+import ThemeToggle from '../components/ThemeToggle';
+
+const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
+const dashboardStorage = typeof window !== 'undefined' ? window.sessionStorage : null;
 
 function Dashboard() {
   const [friends, setFriends] = useState([]);
@@ -16,15 +20,22 @@ function Dashboard() {
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [loadingChangePassword, setLoadingChangePassword] = useState(false);
+  const [isActiveChatsLoading, setIsActiveChatsLoading] = useState(false);
   const [isFriendsLoading, setIsFriendsLoading] = useState(false);
+  const [isLoadingMoreChats, setIsLoadingMoreChats] = useState(false);
+  const [isLoadingMoreFriends, setIsLoadingMoreFriends] = useState(false);
+  const [listPagination, setListPagination] = useState({
+    activeChats: { hasMore: false, nextOffset: 0 },
+    friends: { hasMore: false, nextOffset: 0, total: 0 }
+  });
   
   const [deleteConfirm, setDeleteConfirm] = useState({ friendId: null, step: 0 });
   const [blockConfirm, setBlockConfirm] = useState(null);
   const [removeConfirm, setRemoveConfirm] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [loadingActions, setLoadingActions] = useState({});
+
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '' });
   const [passwordMessage, setPasswordMessage] = useState({ text: '', type: '' });
   
@@ -42,6 +53,34 @@ function Dashboard() {
     blocked: false
   });
 
+  const upsertChatPreview = React.useCallback((incomingUser) => {
+    if (!incomingUser?._id) return;
+
+    setActiveChats((prev) => {
+      const existingIndex = prev.findIndex((chat) => chat._id === incomingUser._id);
+      const existingChat = existingIndex >= 0 ? prev[existingIndex] : null;
+
+      const mergedChat = {
+        ...existingChat,
+        ...incomingUser,
+      };
+
+      if (existingIndex === 0) {
+        return [mergedChat, ...prev.slice(1)];
+      }
+
+      if (existingIndex > 0) {
+        return [
+          mergedChat,
+          ...prev.slice(0, existingIndex),
+          ...prev.slice(existingIndex + 1),
+        ];
+      }
+
+      return [mergedChat, ...prev];
+    });
+  }, []);
+
   const toggleSection = (section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
@@ -50,6 +89,44 @@ function Dashboard() {
   
   const navigate = useNavigate();
   const { user, logout, socket, onlineUsers, updateUser, pushEnabled, enablePushNotifications, disablePushNotifications } = useContext(AuthContext);
+
+  const dashboardListsCacheKey = user?.id ? `dashboard_lists_${user.id}` : null;
+  const activeChatsCacheKey = user?.id ? `dashboard_active_chats_${user.id}` : null;
+  const unreadCountsCacheKey = user?.id ? `dashboard_unread_${user.id}` : null;
+
+  const readSessionCache = React.useCallback((key) => {
+    if (!key) return null;
+    try {
+      const cached = dashboardStorage?.getItem(key);
+      if (!cached) return null;
+      const parsed = JSON.parse(cached);
+      if (!parsed.timestamp || Date.now() - parsed.timestamp > DASHBOARD_CACHE_TTL_MS) {
+        dashboardStorage?.removeItem(key);
+        return null;
+      }
+      return parsed.data;
+    } catch {
+      dashboardStorage?.removeItem(key);
+      return null;
+    }
+  }, []);
+
+  const writeSessionCache = React.useCallback((key, data) => {
+    if (!key) return;
+    try {
+      dashboardStorage?.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+    } catch {
+      // Ignore sessionStorage quota/read-only errors.
+    }
+  }, []);
+
+  const clearDashboardSessionCache = React.useCallback(() => {
+    if (!dashboardListsCacheKey && !activeChatsCacheKey && !unreadCountsCacheKey) return;
+    dashboardStorage?.removeItem(dashboardListsCacheKey);
+    dashboardStorage?.removeItem(activeChatsCacheKey);
+    dashboardStorage?.removeItem(unreadCountsCacheKey);
+    console.log('[Dashboard][sessionStorage] Cleared dashboard cache after local mutation');
+  }, [dashboardListsCacheKey, activeChatsCacheKey, unreadCountsCacheKey]);
 
   const handleTogglePushNotifications = async () => {
     if (pushEnabled) {
@@ -116,7 +193,8 @@ function Dashboard() {
         navigate('/login');
         return;
       }
-      fetchFriends();
+      fetchActiveChats();
+      fetchFriends({ skipActive: true });
       fetchUnreadCounts();
       
       if (user.isProfileSetup === false && !sessionStorage.getItem('skipProfileSetup')) {
@@ -129,14 +207,31 @@ function Dashboard() {
     if (socket) {
       const handleIncoming = (data) => {
         if (data.receiver._id === user.id) {
-          fetchUnreadCounts(); 
-          fetchFriends(); 
+          clearDashboardSessionCache();
+          const sender = data.sender;
+
+          if (sender?._id) {
+            setUnreadCounts((prev) => ({
+              ...prev,
+              [sender._id]: (prev[sender._id] || 0) + 1,
+            }));
+            upsertChatPreview(sender);
+          }
         }
       };
       
-      const handleFriendReq = () => {
+      const handleFriendReq = (payload) => {
         console.log('Incoming friend request received via socket!');
-        fetchFriends();
+        clearDashboardSessionCache();
+        const requester = payload?.requester;
+        if (!requester?._id) {
+          return;
+        }
+
+        setReceivedRequests((prev) => {
+          if (prev.some((u) => String(u._id) === String(requester._id))) return prev;
+          return [requester, ...prev];
+        });
       };
       
       socket.on('receive_message', handleIncoming);
@@ -147,30 +242,143 @@ function Dashboard() {
         socket.off('friend_request_received', handleFriendReq);
       };
     }
-  }, [socket, user]);
+  }, [socket, user, upsertChatPreview, clearDashboardSessionCache]);
 
-  const fetchFriends = async () => {
-    setIsFriendsLoading(true);
+  const fetchActiveChats = async ({ appendActive = false } = {}) => {
+    if (appendActive) setIsLoadingMoreChats(true);
+    else setIsActiveChatsLoading(true);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/friends/${user.id}`);
+      if (!appendActive) {
+        const cached = readSessionCache(activeChatsCacheKey);
+        if (cached) {
+          console.log('[Dashboard][sessionStorage] HIT for active chats; skipping API');
+          setActiveChats(cached.activeChats || []);
+          setListPagination((prev) => ({
+            ...prev,
+            activeChats: cached.pagination?.activeChats || { hasMore: false, nextOffset: 0 },
+          }));
+          return;
+        }
+        console.log('[Dashboard][sessionStorage] MISS for active chats; calling lightweight API');
+      }
+
+      const activeOffset = appendActive ? listPagination.activeChats.nextOffset : 0;
+      const params = new URLSearchParams({
+        activeLimit: '20',
+        activeOffset: String(activeOffset),
+      });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/active-chats/${user.id}?${params.toString()}`);
       const data = await res.json();
-      setFriends(data.friends || []);
-      setActiveChats(data.activeChats || []);
-      setSentRequests(data.sentRequests || []);
-      setReceivedRequests(data.receivedRequests || []);
-      setBlockedUsers(data.blockedUsers || []);
+      const source = res.headers.get('X-Cache-Source') || data.source || 'unknown';
+      console.log(`[Dashboard][API] Active chats returned from ${source.toUpperCase()}: ${(data.activeChats || []).length}`);
+
+      setActiveChats((prev) => appendActive ? [...prev, ...(data.activeChats || [])] : (data.activeChats || []));
+      setListPagination((prev) => ({
+        ...prev,
+        activeChats: data.pagination?.activeChats || { hasMore: false, nextOffset: 0 },
+      }));
+
+      if (!appendActive) {
+        writeSessionCache(activeChatsCacheKey, {
+          activeChats: data.activeChats || [],
+          pagination: data.pagination || null,
+        });
+        console.log('[Dashboard][sessionStorage] SAVED active chats');
+      }
+    } catch (err) {
+      console.error('Error fetching active chats', err);
+    } finally {
+      setIsActiveChatsLoading(false);
+      setIsLoadingMoreChats(false);
+    }
+  };
+
+  const fetchFriends = async ({ appendActive = false, appendFriends = false, skipActive = false } = {}) => {
+    if (appendActive) setIsLoadingMoreChats(true);
+    else if (appendFriends) setIsLoadingMoreFriends(true);
+    else setIsFriendsLoading(true);
+    try {
+      if (!appendActive && !appendFriends) {
+        const cached = readSessionCache(dashboardListsCacheKey);
+        if (cached) {
+          console.log('[Dashboard][sessionStorage] HIT for chat/friend lists; skipping API');
+          setFriends(cached.friends || []);
+          if (!skipActive) setActiveChats(cached.activeChats || []);
+          setSentRequests(cached.sentRequests || []);
+          setReceivedRequests(cached.receivedRequests || []);
+          setBlockedUsers(cached.blockedUsers || []);
+          setListPagination(cached.pagination || {
+            activeChats: { hasMore: false, nextOffset: 0 },
+            friends: { hasMore: false, nextOffset: 0, total: cached.friends?.length || 0 }
+          });
+          return;
+        }
+        console.log('[Dashboard][sessionStorage] MISS for chat/friend lists; calling API');
+      }
+
+      const activeOffset = appendActive ? listPagination.activeChats.nextOffset : 0;
+      const friendsOffset = appendFriends ? listPagination.friends.nextOffset : 0;
+      const params = new URLSearchParams({
+        activeLimit: '20',
+        activeOffset: String(activeOffset),
+        friendsLimit: '20',
+        friendsOffset: String(friendsOffset),
+        requestsLimit: '20',
+        blockedLimit: '20',
+        includeActive: skipActive ? '0' : '1'
+      });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/friends/${user.id}?${params.toString()}`);
+      const data = await res.json();
+      const source = res.headers.get('X-Cache-Source') || data.source || 'unknown';
+      console.log(`[Dashboard][API] Chat/friend lists returned from ${source.toUpperCase()}`);
+      setFriends((prev) => appendFriends ? [...prev, ...(data.friends || [])] : (data.friends || []));
+      if (!skipActive) {
+        setActiveChats((prev) => appendActive ? [...prev, ...(data.activeChats || [])] : (data.activeChats || []));
+      }
+      if (!appendActive && !appendFriends) {
+        setSentRequests(data.sentRequests || []);
+        setReceivedRequests(data.receivedRequests || []);
+        setBlockedUsers(data.blockedUsers || []);
+      }
+      setListPagination(data.pagination || {
+        activeChats: { hasMore: false, nextOffset: 0 },
+        friends: { hasMore: false, nextOffset: 0, total: data.friends?.length || 0 }
+      });
+      if (!appendActive && !appendFriends) {
+        writeSessionCache(dashboardListsCacheKey, {
+          friends: data.friends || [],
+          activeChats: skipActive ? [] : (data.activeChats || []),
+          sentRequests: data.sentRequests || [],
+          receivedRequests: data.receivedRequests || [],
+          blockedUsers: data.blockedUsers || [],
+          pagination: data.pagination || null
+        });
+        console.log('[Dashboard][sessionStorage] SAVED chat/friend lists');
+      }
     } catch (err) {
       console.error('Error fetching data', err);
     } finally {
       setIsFriendsLoading(false);
+      setIsLoadingMoreChats(false);
+      setIsLoadingMoreFriends(false);
     }
   };
 
   const fetchUnreadCounts = async () => {
     try {
+      const cached = readSessionCache(unreadCountsCacheKey);
+      if (cached) {
+        console.log('[Dashboard][sessionStorage] HIT for unread counts; skipping API');
+        setUnreadCounts(cached || {});
+        return;
+      }
+      console.log('[Dashboard][sessionStorage] MISS for unread counts; calling API');
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/unread/${user.id}`);
       const data = await res.json();
+      const source = res.headers.get('X-Cache-Source') || 'unknown';
+      console.log(`[Dashboard][API] Unread counts returned from ${source.toUpperCase()}`);
       setUnreadCounts(data || {});
+      writeSessionCache(unreadCountsCacheKey, data || {});
     } catch (err) {}
   };
 
@@ -180,9 +388,10 @@ function Dashboard() {
     setIsSearching(true);
     setHasSearched(false);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/search?q=${searchQuery}&userId=${user.id}`);
+      const params = new URLSearchParams({ q: searchQuery.trim(), userId: user.id, limit: '20' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/search?${params.toString()}`);
       const data = await res.json();
-      setSearchResults(data); 
+      setSearchResults(Array.isArray(data) ? data : (data.users || [])); 
       setHasSearched(true);
     } catch (err) {
       console.error(err);
@@ -191,28 +400,56 @@ function Dashboard() {
     }
   };
 
-  const executeAction = async (endpoint, payload) => {
+  const executeAction = async (endpoint, payload, onSuccess, actionKey) => {
+    if (actionKey) setLoadingActions(prev => ({ ...prev, [actionKey]: true }));
     try {
-      await fetch(`${import.meta.env.VITE_API_URL}/api/users/${endpoint}`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      fetchFriends();
+      if (res.ok && onSuccess) {
+        clearDashboardSessionCache();
+        
+        // Invalidate specific user chat cache
+        const targetId = payload.friendId || payload.requesterId || payload.receiverId || payload.blockId;
+        if (targetId) {
+          try {
+            sessionStorage.removeItem(`chat_cache_${targetId}`);
+            console.log(`[Dashboard] Invalidated local cache for ${targetId}`);
+          } catch(e) {}
+        }
+        
+        onSuccess();
+      }
     } catch (err) {}
+    finally {
+      if (actionKey) setLoadingActions(prev => ({ ...prev, [actionKey]: false }));
+    }
   };
 
   const handleSendRequest = async (friendId) => {
-    await executeAction('add-friend', { userId: user.id, friendId });
+    await executeAction('add-friend', { userId: user.id, friendId }, () => {
+      const targetUser = searchResults.find(u => u._id === friendId) || viewedProfile?.user || { _id: friendId, username: 'Unknown' };
+      setSentRequests((prev) => [...prev, targetUser]);
+    }, `send-${friendId}`);
   };
   const handleAcceptRequest = async (requesterId) => {
-    await executeAction('accept-request', { userId: user.id, requesterId });
+    await executeAction('accept-request', { userId: user.id, requesterId }, () => {
+      const targetUser = receivedRequests.find(u => u._id === requesterId) || viewedProfile?.user || { _id: requesterId, username: 'Unknown' };
+      setReceivedRequests((prev) => prev.filter((u) => u._id !== requesterId));
+      setFriends((prev) => [...prev, targetUser]);
+    }, `accept-${requesterId}`);
   };
   const handleRejectRequest = async (requesterId) => {
-    await executeAction('reject-request', { userId: user.id, requesterId });
+    await executeAction('reject-request', { userId: user.id, requesterId }, () => {
+      setReceivedRequests((prev) => prev.filter((u) => u._id !== requesterId));
+    }, `reject-${requesterId}`);
   };
   const handleCancelRequest = async (receiverId) => {
-    await executeAction('cancel-request', { userId: user.id, receiverId });
+    await executeAction('cancel-request', { userId: user.id, receiverId }, () => {
+      setSentRequests((prev) => prev.filter((u) => u._id !== receiverId));
+    }, `cancel-${receiverId}`);
   };
   const handleBlockUser = async (blockId) => {
     setBlockConfirm(blockId);
@@ -220,12 +457,23 @@ function Dashboard() {
 
   const confirmBlockUser = async () => {
     if (!blockConfirm) return;
-    await executeAction('block-user', { userId: user.id, blockId: blockConfirm });
+    setLoadingActions(prev => ({ ...prev, [`block-${blockConfirm}`]: true }));
+    await executeAction('block-user', { userId: user.id, blockId: blockConfirm }, () => {
+      const targetUser = friends.find(u => u._id === blockConfirm) || searchResults.find(u => u._id === blockConfirm) || viewedProfile?.user || { _id: blockConfirm, username: 'Unknown' };
+      setBlockedUsers((prev) => [...prev, targetUser]);
+      setFriends((prev) => prev.filter((u) => u._id !== blockConfirm));
+      setActiveChats((prev) => prev.filter((u) => u._id !== blockConfirm));
+    });
+    setLoadingActions(prev => ({ ...prev, [`block-${blockConfirm}`]: false }));
     setBlockConfirm(null);
   };
 
   const handleUnblockUser = async (blockId) => {
-    await executeAction('unblock-user', { userId: user.id, blockId });
+    await executeAction('unblock-user', { userId: user.id, blockId }, () => {
+      const targetUser = blockedUsers.find(u => u._id === blockId) || viewedProfile?.user || { _id: blockId, username: 'Unknown' };
+      setBlockedUsers((prev) => prev.filter((u) => u._id !== blockId));
+      setFriends((prev) => [...prev, targetUser]);
+    }, `unblock-${blockId}`);
     if (socket) socket.emit('user_unblocked', { userId: user.id, unblockedId: blockId });
   };
 
@@ -236,7 +484,12 @@ function Dashboard() {
 
   const confirmRemoveFriend = async () => {
     if (!removeConfirm) return;
-    await executeAction('remove-friend', { userId: user.id, friendId: removeConfirm });
+    setLoadingActions(prev => ({ ...prev, [`remove-${removeConfirm}`]: true }));
+    await executeAction('remove-friend', { userId: user.id, friendId: removeConfirm }, () => {
+      setFriends((prev) => prev.filter((u) => u._id !== removeConfirm));
+      setActiveChats((prev) => prev.filter((u) => u._id !== removeConfirm));
+    });
+    setLoadingActions(prev => ({ ...prev, [`remove-${removeConfirm}`]: false }));
     setRemoveConfirm(null);
   };
   const handleDeleteChat = async (e, friendId) => {
@@ -246,9 +499,14 @@ function Dashboard() {
     if (deleteConfirm.step === 2) {
       try {
         await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}`, { method: 'DELETE' });
+        clearDashboardSessionCache();
+        try { sessionStorage.removeItem(`chat_cache_${friendId}`); } catch(e){}
         setDeleteConfirm({ friendId: null, step: 0 });
-        fetchFriends(); 
-        fetchUnreadCounts();
+        setUnreadCounts((prev) => {
+          const updated = { ...prev };
+          delete updated[friendId];
+          return updated;
+        });
       } catch (err) {}
     }
   };
@@ -342,7 +600,7 @@ function Dashboard() {
       {/* Sticky header */}
       <div style={{
         position: 'sticky', top: 0, zIndex: 20,
-        background: 'rgba(13,17,23,0.95)',
+        background: 'var(--header-bg)',
         backdropFilter: 'blur(10px)',
         WebkitBackdropFilter: 'blur(10px)',
         borderBottom: '1px solid var(--glass-border)',
@@ -362,7 +620,7 @@ function Dashboard() {
           <div style={{ position: 'relative' }} ref={profileMenuRef}>
             <div 
               onClick={(e) => { e.stopPropagation(); setIsProfileMenuOpen(!isProfileMenuOpen); setIsChangePasswordOpen(false); setPasswordMessage({ text: '', type: '' }); }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', padding: '0.4rem 0.6rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', minWidth: 0 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', background: 'var(--input-bg)', padding: '0.4rem 0.6rem', borderRadius: '8px', border: '1px solid var(--glass-border)', minWidth: 0 }}
             >
               <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.8rem', color: 'white', flexShrink: 0, overflow: 'hidden' }}>
                 {user?.profilePic ? <img src={user.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (user?.firstName ? user.firstName.charAt(0).toUpperCase() : user?.username?.charAt(0).toUpperCase())}
@@ -372,9 +630,9 @@ function Dashboard() {
             </div>
 
             {isProfileMenuOpen && (
-              <div 
+              <div
                 onClick={(e) => e.stopPropagation()}
-                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '220px', background: 'rgba(15,15,22,0.97)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)' }}
+                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '220px', background: 'var(--panel-bg)', border: '1px solid var(--glass-border)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)' }}
               >
                 {!isChangePasswordOpen ? (
                   <>
@@ -398,50 +656,54 @@ function Dashboard() {
                     </div>
                     <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Push Notifications</span>
-                      <div 
+                      <div
                         onClick={handleTogglePushNotifications}
-                        style={{ 
-                          width: '34px', height: '18px', 
-                          background: pushEnabled ? 'var(--success)' : '#333', 
-                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s' 
+                        style={{
+                          width: '34px', height: '18px',
+                          background: pushEnabled ? 'var(--success)' : '#333',
+                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s'
                         }}
                       >
-                        <div style={{ 
-                          width: '14px', height: '14px', background: 'white', borderRadius: '50%', 
-                          position: 'absolute', top: '2px', 
-                          left: pushEnabled ? '18px' : '2px', 
-                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)' 
+                        <div style={{
+                          width: '14px', height: '14px', background: 'white', borderRadius: '50%',
+                          position: 'absolute', top: '2px',
+                          left: pushEnabled ? '18px' : '2px',
+                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
                         }} />
                       </div>
                     </div>
-                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
+                    <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Theme Mode</span>
+                      <ThemeToggle />
+                    </div>
+                    <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', margin: '0.25rem 0.3rem' }} />
                     <button 
                       style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--glass-border)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       onClick={() => { setIsProfileEditOpen(true); setIsProfileMenuOpen(false); }}
                     >
                       <span style={{ fontSize: '0.75rem' }}>🧑‍🎓</span> Profile Settings
                     </button>
-                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
+                    <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', margin: '0.25rem 0.3rem' }} />
                     <button 
                       style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--glass-border)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       onClick={() => setIsChangePasswordOpen(true)}
                     >
                       <span style={{ fontSize: '0.75rem' }}>🔒</span> Change Password
                     </button>
-                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
+                    <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', margin: '0.25rem 0.3rem' }} />
                     <button 
-                      style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: '#ffb3b3', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
+                      style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--danger)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,60,60,0.08)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       onClick={openDeleteModal}
                     >
                       <span style={{ fontSize: '0.75rem' }}>🗑️</span> Delete Account
                     </button>
-                    <hr style={{ border: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)', margin: '0.25rem 0.3rem' }} />
+                    <hr style={{ border: 'none', borderBottom: '1px solid var(--glass-border)', margin: '0.25rem 0.3rem' }} />
                     <button 
                       style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.7rem', border: 'none', background: 'transparent', color: 'var(--danger)', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '0.5rem', transition: 'background 0.15s' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,60,60,0.08)'}
@@ -504,7 +766,7 @@ function Dashboard() {
         </div>
         <p style={{ margin: '0 0 1rem 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>All your conversations are secure and private.</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {isFriendsLoading ? (
+          {isActiveChatsLoading ? (
             <div style={{ textAlign: 'center', padding: '1.5rem' }}>
               <span className="spinner" style={{ borderTopColor: 'var(--accent)', marginRight: 0 }}></span>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Fetching your chats...</div>
@@ -512,11 +774,12 @@ function Dashboard() {
           ) : activeChats.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: '1rem 0' }}>No active chats. Open the Friends menu to start one!</p>
           ) : (
-            activeChats.map(f => {
+            <>
+            {activeChats.map(f => {
               const unread = unreadCounts[f._id] || 0;
               const displayName = f.firstName || f.lastName ? `${f.firstName} ${f.lastName}` : f.username;
               return (
-                <div key={f._id} style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => navigate(`/chat/${f._id}`)}>
+                <div key={f._id} className="chat-list-item" style={{ padding: '0.75rem 1rem', borderRadius: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => navigate(`/chat/${f._id}`)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ position: 'relative' }}>
                       <div style={{ width: '40px', height: '40px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
@@ -538,7 +801,13 @@ function Dashboard() {
                   </div>
                 </div>
               );
-            })
+            })}
+            {listPagination.activeChats?.hasMore && (
+              <button className="btn btn-secondary" style={{ marginTop: '0.5rem', padding: '0.5rem', fontSize: '0.8rem' }} onClick={() => fetchActiveChats({ appendActive: true })} disabled={isLoadingMoreChats}>
+                {isLoadingMoreChats ? 'Loading...' : 'Load more chats'}
+              </button>
+            )}
+            </>
           )}
         </div>
       </div>
@@ -586,7 +855,7 @@ function Dashboard() {
                   else if (receivedRequests.some(f => f._id === u._id)) relation = 'received';
                   
                   return (
-                  <div key={u._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: u, relation })}>
+                  <div key={u._id} className="chat-list-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', borderRadius: '8px', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: u, relation })}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <div style={{ width: '36px', height: '36px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.9rem' }}>
                         {u.profilePic ? <img src={u.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (u.firstName ? u.firstName.charAt(0).toUpperCase() : u.username.charAt(0).toUpperCase())}
@@ -599,7 +868,9 @@ function Dashboard() {
                     {relation === 'friend' ? <span style={{ fontSize: '0.8rem', color: 'var(--success)' }}>Added</span> : 
                      relation === 'sent' ? <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Pending Req</span> :
                      relation === 'received' ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>See Below</span> :
-                    <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }} onClick={(e) => { e.stopPropagation(); handleSendRequest(u._id) }}>Send Request</button>}
+                    <button className="btn btn-secondary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={loadingActions[`send-${u._id}`]} onClick={(e) => { e.stopPropagation(); handleSendRequest(u._id) }}>
+                      {loadingActions[`send-${u._id}`] ? <span className="spinner" style={{ width: '12px', height: '12px', marginRight: 0, borderWidth: '2px' }}></span> : "Send Request"}
+                    </button>}
                   </div>
                 )})}
               </div>
@@ -634,7 +905,7 @@ function Dashboard() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {receivedRequests.map(r => (
-                            <div key={r._id} style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                            <div key={r._id} className="chat-list-item" style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', borderRadius: '8px' }}>
                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: r, relation: 'received' })}>
                                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem', flexShrink: 0 }}>
                                    {r.profilePic ? <img src={r.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (r.firstName ? r.firstName.charAt(0).toUpperCase() : r.username.charAt(0).toUpperCase())}
@@ -644,8 +915,12 @@ function Dashboard() {
                                  </div>
                                </div>
                                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                 <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleAcceptRequest(r._id)}>Accept</button>
-                                 <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem' }} onClick={() => handleRejectRequest(r._id)}>Reject</button>
+                                 <button className="btn" style={{ background: 'var(--success)', padding: '0.3rem', flex: 1, fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={loadingActions[`accept-${r._id}`]} onClick={() => handleAcceptRequest(r._id)}>
+                                   {loadingActions[`accept-${r._id}`] ? <span className="spinner" style={{ width: '10px', height: '10px', marginRight: 0, borderWidth: '2px', borderTopColor: 'var(--bg-dark)' }}></span> : "Accept"}
+                                 </button>
+                                 <button className="btn btn-secondary" style={{ padding: '0.3rem', flex: 1, fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={loadingActions[`reject-${r._id}`]} onClick={() => handleRejectRequest(r._id)}>
+                                   {loadingActions[`reject-${r._id}`] ? <span className="spinner" style={{ width: '10px', height: '10px', marginRight: 0, borderWidth: '2px' }}></span> : "Reject"}
+                                 </button>
                                </div>
                             </div>
                           ))}
@@ -682,7 +957,7 @@ function Dashboard() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {friends.map(f => (
-                            <div key={f._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
+                            <div key={f._id} className="chat-list-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', borderRadius: '8px', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
                                   <div style={{ position: 'relative' }}>
                                     <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem' }}>
@@ -696,6 +971,11 @@ function Dashboard() {
                                </div>
                             </div>
                           ))}
+                          {listPagination.friends?.hasMore && (
+                            <button className="btn btn-secondary" style={{ padding: '0.45rem', fontSize: '0.78rem' }} onClick={() => fetchFriends({ appendFriends: true })} disabled={isLoadingMoreFriends}>
+                              {isLoadingMoreFriends ? 'Loading...' : 'Load more friends'}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -727,14 +1007,16 @@ function Dashboard() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {sentRequests.map(s => (
-                            <div key={s._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                            <div key={s._id} className="chat-list-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', borderRadius: '8px' }}>
                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: s, relation: 'sent' })}>
                                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
                                    {s.profilePic ? <img src={s.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (s.firstName ? s.firstName.charAt(0).toUpperCase() : s.username.charAt(0).toUpperCase())}
                                  </div>
                                  <span style={{ fontSize: '0.85rem' }}>{s.firstName || s.lastName ? `${s.firstName} ${s.lastName}` : s.username}</span>
                                </div>
-                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: '#ffb3b3' }} onClick={() => handleCancelRequest(s._id)}>Cancel</button>
+                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: 'var(--danger)', border: '1px solid var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent' }} disabled={loadingActions[`cancel-${s._id}`]} onClick={() => handleCancelRequest(s._id)}>
+                                 {loadingActions[`cancel-${s._id}`] ? <span className="spinner" style={{ width: '10px', height: '10px', marginRight: 0, borderWidth: '2px', borderTopColor: 'var(--danger)' }}></span> : "Cancel"}
+                               </button>
                             </div>
                           ))}
                         </div>
@@ -768,14 +1050,16 @@ function Dashboard() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {blockedUsers.map(b => (
-                            <div key={b._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,0,0,0.05)', borderRadius: '8px', border: '1px solid rgba(255,0,0,0.1)' }}>
+                            <div key={b._id} className="chat-list-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255,0,0,0.1)' }}>
                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
                                    {b.profilePic ? <img src={b.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (b.firstName ? b.firstName.charAt(0).toUpperCase() : b.username.charAt(0).toUpperCase())}
                                  </div>
-                                 <span style={{ fontSize: '0.85rem', color: '#ffb3b3' }}>{b.firstName || b.lastName ? `${b.firstName} ${b.lastName}` : b.username}</span>
+                                 <span style={{ fontSize: '0.85rem', color: 'var(--danger)', fontWeight: '500' }}>{b.firstName || b.lastName ? `${b.firstName} ${b.lastName}` : b.username}</span>
                                </div>
-                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }} onClick={() => handleUnblockUser(b._id)}>Unblock</button>
+                               <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={loadingActions[`unblock-${b._id}`]} onClick={() => handleUnblockUser(b._id)}>
+                                 {loadingActions[`unblock-${b._id}`] ? <span className="spinner" style={{ width: '10px', height: '10px', marginRight: 0, borderWidth: '2px' }}></span> : "Unblock"}
+                               </button>
                             </div>
                           ))}
                         </div>
@@ -811,18 +1095,20 @@ function Dashboard() {
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
               <button
+                disabled={loadingActions[`block-${blockConfirm}`]}
                 onClick={confirmBlockUser}
                 style={{
                   width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
                   background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
                   fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
                   boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
-                  transition: 'transform 0.15s ease'
+                  transition: 'transform 0.15s ease',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}
-                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
-                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                onMouseDown={(e) => !loadingActions[`block-${blockConfirm}`] && (e.currentTarget.style.transform = 'scale(0.97)')}
+                onMouseUp={(e) => !loadingActions[`block-${blockConfirm}`] && (e.currentTarget.style.transform = 'scale(1)')}
               >
-                Block User
+                {loadingActions[`block-${blockConfirm}`] ? <span className="spinner" style={{ width: '15px', height: '15px', marginRight: 0, borderWidth: '2px' }}></span> : "Block User"}
               </button>
               <button
                 onClick={() => setBlockConfirm(null)}
@@ -863,18 +1149,20 @@ function Dashboard() {
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
               <button
+                disabled={loadingActions[`remove-${removeConfirm}`]}
                 onClick={confirmRemoveFriend}
                 style={{
                   width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
                   background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
                   fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
                   boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
-                  transition: 'transform 0.15s ease'
+                  transition: 'transform 0.15s ease',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}
-                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
-                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                onMouseDown={(e) => !loadingActions[`remove-${removeConfirm}`] && (e.currentTarget.style.transform = 'scale(0.97)')}
+                onMouseUp={(e) => !loadingActions[`remove-${removeConfirm}`] && (e.currentTarget.style.transform = 'scale(1)')}
               >
-                Remove Friend
+                {loadingActions[`remove-${removeConfirm}`] ? <span className="spinner" style={{ width: '15px', height: '15px', marginRight: 0, borderWidth: '2px' }}></span> : "Remove Friend"}
               </button>
               <button
                 onClick={() => setRemoveConfirm(null)}
@@ -902,36 +1190,36 @@ function Dashboard() {
         >
           <div 
             onClick={e => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: '420px', margin: '1rem', background: 'rgba(18,18,28,0.98)', border: '1px solid rgba(255,60,60,0.4)', borderRadius: '16px', padding: '2rem', boxShadow: '0 20px 60px rgba(0,0,0,0.8)' }}
+            style={{ width: '100%', maxWidth: '420px', margin: '1rem', background: 'var(--panel-bg)', border: '1px solid var(--danger)', borderRadius: '16px', padding: '2rem', boxShadow: '0 20px 60px rgba(0,0,0,0.8)' }}
           >
             <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
               <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>⚠️</div>
-              <h2 style={{ margin: 0, color: '#ff6b6b', fontSize: '1.3rem' }}>Delete Account</h2>
+              <h2 style={{ margin: 0, color: 'var(--danger)', fontSize: '1.3rem' }}>Delete Account</h2>
               <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Step {deleteModal.step} of 2</p>
             </div>
 
             {deleteModal.step === 1 ? (
               <>
-                <div style={{ background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.25)', borderRadius: '10px', padding: '1rem', marginBottom: '1.5rem' }}>
-                  <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold', color: '#ffb3b3', fontSize: '0.9rem' }}>This action will:</p>
+                <div style={{ background: 'rgba(255,60,60,0.08)', border: '1px solid var(--danger)', borderRadius: '10px', padding: '1rem', marginBottom: '1.5rem' }}>
+                  <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold', color: 'var(--danger)', fontSize: '0.9rem' }}>This action will:</p>
                   <ul style={{ margin: 0, paddingLeft: '1.2rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.8' }}>
-                    <li>Flag your account as <strong style={{color:'#ffb3b3'}}>Inactive</strong></li>
+                    <li>Flag your account as <strong style={{color:'var(--danger)'}}>Inactive</strong></li>
                     <li>Block all future logins with your credentials</li>
-                    <li>Queue your data for <strong style={{color:'#ffb3b3'}}>permanent deletion</strong> by Admin</li>
-                    <li>Log you out <strong style={{color:'#ffb3b3'}}>immediately</strong></li>
+                    <li>Queue your data for <strong style={{color:'var(--danger)'}}>permanent deletion</strong> by Admin</li>
+                    <li>Log you out <strong style={{color:'var(--danger)'}}>immediately</strong></li>
                   </ul>
                 </div>
                 <p style={{ textAlign: 'center', fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Are you sure you want to continue?</p>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                   <button className="btn btn-secondary" style={{ flex: 1, padding: '0.6rem' }} onClick={() => setDeleteModal(prev => ({ ...prev, open: false }))}>Cancel</button>
-                  <button className="btn" style={{ flex: 1, padding: '0.6rem', background: '#7f3030', border: '1px solid #ff6b6b', color: '#ffb3b3' }} onClick={() => setDeleteModal(prev => ({ ...prev, step: 2, error: '' }))}>Yes, Continue</button>
+                  <button className="btn" style={{ flex: 1, padding: '0.6rem', background: 'var(--danger)', border: 'none', color: 'white' }} onClick={() => setDeleteModal(prev => ({ ...prev, step: 2, error: '' }))}>Yes, Continue</button>
                 </div>
               </>
             ) : (
               <>
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '1.25rem' }}>Enter your password to confirm you are the owner of this account. This is your <strong>final</strong> confirmation.</p>
                 {deleteModal.error && (
-                  <div style={{ background: 'rgba(255,0,0,0.12)', border: '1px solid rgba(255,0,0,0.4)', borderRadius: '8px', padding: '0.6rem 0.9rem', marginBottom: '1rem', fontSize: '0.82rem', color: '#ffb3b3' }}>{deleteModal.error}</div>
+                  <div style={{ background: 'rgba(255,0,0,0.12)', border: '1px solid var(--danger)', borderRadius: '8px', padding: '0.6rem 0.9rem', marginBottom: '1rem', fontSize: '0.82rem', color: 'var(--danger)' }}>{deleteModal.error}</div>
                 )}
                 <input 
                   type="password"
@@ -941,7 +1229,7 @@ function Dashboard() {
                   onChange={e => setDeleteModal(prev => ({ ...prev, password: e.target.value, error: '' }))}
                   onKeyDown={e => e.key === 'Enter' && handleSoftDelete()}
                   autoFocus
-                  style={{ marginBottom: '1rem', border: '1px solid rgba(255,60,60,0.4)' }}
+                  style={{ marginBottom: '1rem', border: '1px solid var(--danger)' }}
                   disabled={deleteModal.loading}
                 />
                 <div style={{ display: 'flex', gap: '0.75rem' }}>

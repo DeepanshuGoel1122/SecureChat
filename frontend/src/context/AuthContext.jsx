@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 export const AuthContext = createContext();
@@ -39,6 +39,8 @@ export const AuthProvider = ({ children }) => {
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   const [timeoutMessage, setTimeoutMessage] = useState('');
   const [recentNotification, setRecentNotification] = useState(null);
+  const notificationTouchStartXRef = useRef(null);
+  const isNotificationSwipeCloseRef = useRef(false);
 
   useEffect(() => {
     if (token) {
@@ -52,6 +54,16 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
     }
   }, [token]);
+
+  useEffect(() => {
+    if (!recentNotification?.id) return undefined;
+
+    const timeoutId = setTimeout(() => {
+      setRecentNotification((prev) => (prev?.id === recentNotification.id ? null : prev));
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
+  }, [recentNotification?.id]);
 
   // Inactivity Timeout Enforcer (3 Hours)
   useEffect(() => {
@@ -229,11 +241,6 @@ export const AuthProvider = ({ children }) => {
             body: data.text || (data.imageUrl ? 'Sent an image' : (data.imageUrls?.length > 0 ? 'Sent images' : (data.file ? 'Sent a file' : 'Sent a message'))),
             friendId: data.sender._id
           });
-          
-          // Auto-clear notification after 5 seconds
-          setTimeout(() => {
-            setRecentNotification(prev => (prev?.id === Date.now() ? null : prev));
-          }, 5000);
         }
       });
 
@@ -267,16 +274,46 @@ export const AuthProvider = ({ children }) => {
     });
   };
 
+  const handleNotificationTouchStart = (e) => {
+    if (!e.touches?.length) return;
+    notificationTouchStartXRef.current = e.touches[0].clientX;
+    isNotificationSwipeCloseRef.current = false;
+  };
+
+  const handleNotificationTouchEnd = (e) => {
+    const startX = notificationTouchStartXRef.current;
+    if (startX == null || !e.changedTouches?.length) return;
+
+    const endX = e.changedTouches[0].clientX;
+    const diffX = endX - startX;
+
+    if (Math.abs(diffX) > 55) {
+      isNotificationSwipeCloseRef.current = true;
+      setRecentNotification(null);
+    }
+
+    notificationTouchStartXRef.current = null;
+  };
+
+  const handleNotificationClick = () => {
+    if (isNotificationSwipeCloseRef.current) {
+      isNotificationSwipeCloseRef.current = false;
+      return;
+    }
+    if (!recentNotification?.friendId) return;
+    window.location.href = `/chat/${recentNotification.friendId}`;
+    setRecentNotification(null);
+  };
+
   return (
     <AuthContext.Provider value={{ user, token, login, logout, socket, onlineUsers, updateUser, pushEnabled, enablePushNotifications, disablePushNotifications }}>
       {children}
       {recentNotification && (
         <div 
           className="notification-toast"
-          onClick={() => {
-            window.location.href = `/chat/${recentNotification.friendId}`;
-            setRecentNotification(null);
-          }}
+          onClick={handleNotificationClick}
+          onTouchStart={handleNotificationTouchStart}
+          onTouchEnd={handleNotificationTouchEnd}
         >
           <div className="notification-icon">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

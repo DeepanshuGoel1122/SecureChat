@@ -10,7 +10,16 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const messageRoutes = require('./routes/messages');
 const adminRoutes = require('./routes/admin');
+const cacheDebugRoutes = require('./routes/cacheDebug');
 const Message = require('./models/Message');
+const {
+  connectRedis,
+  invalidateRoom,
+  invalidateUser,
+  invalidateUserChatSummaries,
+  pushRoomMessage,
+  upsertLatestMessagePartner,
+} = require('./utils/cache');
 
 
 const webPush = require('web-push');
@@ -31,7 +40,7 @@ const io = new Server(server, {
   },
 });
 
-app.use(cors());
+app.use(cors({ exposedHeaders: ['X-Cache-Source'] }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -54,11 +63,16 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/debug', cacheDebugRoutes);
 
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB Connected successfully'))
   .catch((err) => console.log('MongoDB Connection Error:', err));
+
+connectRedis().catch((err) => {
+  console.warn('[redis] continuing without cache:', err.message);
+});
 
 const onlineUsers = new Map(); // Maps socket.id -> userId
 
@@ -159,6 +173,15 @@ io.on('connection', (socket) => {
           populate: { path: 'sender', select: 'username' }
         });
 
+      const populatedPlainMessage = populatedMsg.toObject();
+      await pushRoomMessage(data.senderId, data.receiverId, populatedPlainMessage);
+      await Promise.all([
+        upsertLatestMessagePartner(data.senderId, data.receiverId, populatedPlainMessage.createdAt),
+        upsertLatestMessagePartner(data.receiverId, data.senderId, populatedPlainMessage.createdAt),
+        invalidateUserChatSummaries(data.senderId),
+        invalidateUserChatSummaries(data.receiverId),
+      ]);
+
       io.to(data.receiverId).emit('receive_message', populatedMsg);
       io.to(data.senderId).emit('receive_message', populatedMsg);
 
@@ -208,6 +231,7 @@ io.on('connection', (socket) => {
       });
 
       if (updatedMsg) {
+        await invalidateRoom(updatedMsg.sender._id, updatedMsg.receiver._id);
         io.to(updatedMsg.receiver._id.toString()).emit('message_edited', updatedMsg);
         io.to(updatedMsg.sender._id.toString()).emit('message_edited', updatedMsg);
       }
@@ -222,6 +246,7 @@ io.on('connection', (socket) => {
        { $set: { isRead: true } }
      );
       if (res.modifiedCount > 0) {
+        await invalidateUserChatSummaries(userId);
         io.to(friendId).emit('messages_read', { byUserId: userId });
       }
   });
@@ -267,6 +292,11 @@ io.on('connection', (socket) => {
       const senderId = message.sender.toString();
 
       await Message.findByIdAndDelete(messageId);
+      await Promise.all([
+        invalidateRoom(senderId, receiverId),
+        invalidateUser(senderId),
+        invalidateUser(receiverId),
+      ]);
 
       // Notify both sender and receiver to remove from their UI
       io.to(senderId).emit('message_deleted', { messageId });

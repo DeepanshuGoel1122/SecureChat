@@ -1,5 +1,6 @@
 import React, { useState, useRef, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
+import ImageGalleryModal from './ImageGalleryModal';
 
 function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
   const { user, updateUser } = useContext(AuthContext);
@@ -7,6 +8,7 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
   const [lastName, setLastName] = useState(user?.lastName || '');
   const [bio, setBio] = useState(user?.bio || '');
   const [profilePic, setProfilePic] = useState(user?.profilePic || '');
+  const [isProfileImageOpen, setIsProfileImageOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
@@ -83,7 +85,11 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-            <div style={{ width: '100px', height: '100px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '3rem', fontWeight: 'bold', color: 'white', position: 'relative', border: '3px solid rgba(255,255,255,0.1)' }}>
+            <div
+              style={{ width: '100px', height: '100px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '3rem', fontWeight: 'bold', color: 'white', position: 'relative', border: '3px solid rgba(255,255,255,0.1)', cursor: profilePic ? 'pointer' : 'default' }}
+              onClick={() => profilePic && !isUploading && setIsProfileImageOpen(true)}
+              title={profilePic ? 'View full profile image' : ''}
+            >
               {profilePic ? (
                 <img src={profilePic} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
@@ -132,6 +138,12 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
           
         </form>
       </div>
+      <ImageGalleryModal
+        isOpen={isProfileImageOpen}
+        onClose={() => setIsProfileImageOpen(false)}
+        images={profilePic ? [profilePic] : []}
+        initialIndex={0}
+      />
     </div>
   );
 }

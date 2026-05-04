@@ -6,6 +6,10 @@ import FileDisplay from '../components/FileDisplay';
 import { formatFileSize } from '../assets/fileIcons';
 import ImageGalleryModal from '../components/ImageGalleryModal';
 
+const CHAT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CHAT_BACKGROUND_REFRESH_INTERVAL_MS = 30 * 1000;
+const chatStorage = typeof window !== 'undefined' ? window.sessionStorage : null;
+
 function ChatRoom() {
   const { friendId } = useParams(); 
   const { user, socket, onlineUsers } = useContext(AuthContext);
@@ -14,6 +18,49 @@ function ChatRoom() {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [friendDetails, setFriendDetails] = useState(null);
+  
+  // Cache messages per friend to avoid re-fetching
+  const [messagesCache, setMessagesCache] = useState(new Map());
+  
+  // Load cached chat data from sessionStorage. Message bodies should not persist after the browser session.
+  const loadFromSessionStorage = (friendId) => {
+    const cacheKey = `chat_cache_${friendId}`;
+    try {
+      const cached = chatStorage?.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        // Check if cache is not too old (24 hours)
+        if (parsed.timestamp && (Date.now() - parsed.timestamp) < CHAT_CACHE_TTL_MS) {
+          console.log(`[ChatRoom][sessionStorage] HIT for friend ${friendId}: ${parsed.messages?.length || 0} cached messages`);
+          return parsed;
+        } else {
+          // Remove expired cache
+          console.log(`[ChatRoom][sessionStorage] EXPIRED for friend ${friendId}; removing stale cache`);
+          chatStorage?.removeItem(cacheKey);
+        }
+      } else {
+        console.log(`[ChatRoom][sessionStorage] MISS for friend ${friendId}`);
+      }
+    } catch (e) {
+      console.warn(`[ChatRoom][sessionStorage] Failed to load cache for friend ${friendId}:`, e);
+      chatStorage?.removeItem(cacheKey);
+    }
+    return null;
+  };
+
+  // Persist chat cache to sessionStorage
+  const persistToSessionStorage = (friendId, data) => {
+    try {
+      const messagesCount = data.messages?.length || 0;
+      chatStorage?.setItem(`chat_cache_${friendId}`, JSON.stringify({
+        ...data,
+        timestamp: Date.now()
+      }));
+      console.log(`[ChatRoom][sessionStorage] SAVED for friend ${friendId}: ${messagesCount} messages`);
+    } catch (e) {
+      console.warn(`[ChatRoom][sessionStorage] Failed to persist cache for friend ${friendId}:`, e);
+    }
+  };
   
   const [userState, setUserState] = useState('none'); // 'friend', 'sent_pending', 'received_pending', 'blocked', 'none'
   const [sentCount, setSentCount] = useState(0);
@@ -24,11 +71,16 @@ function ChatRoom() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [maxVisible, setMaxVisible] = useState(20);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedAttachments, setSelectedAttachments] = useState([]);
   const [galleryState, setGalleryState] = useState({ isOpen: false, initialIndex: 0, images: [] });
   const [compressionMode, setCompressionMode] = useState('compressed'); // 'compressed' or 'hd'
   const [isCompressing, setIsCompressing] = useState(false);
+  const [pendingMessages, setPendingMessages] = useState([]);
+  const [isNetworkOnline, setIsNetworkOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
   // File upload states
   const [fileUploadError, setFileUploadError] = useState(null);
@@ -46,7 +98,9 @@ function ChatRoom() {
   const [canDeleteMessages, setCanDeleteMessages] = useState(true);
   const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null);
   const [blockConfirm, setBlockConfirm] = useState(null);
+  const [isBlockingAction, setIsBlockingAction] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState(null);
+  const [isRemovingAction, setIsRemovingAction] = useState(false);
   const [isViewProfileOpen, setIsViewProfileOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
@@ -57,12 +111,134 @@ function ChatRoom() {
   const firstUnreadIdRef = useRef(null);
   const unreadDividerRef = useRef(null);
   const hasLoadedOnceRef = useRef(false);
+  const suppressNextAutoScrollRef = useRef(false);
+  const pendingFlushLockRef = useRef(false);
+  const pendingMessagesRef = useRef([]);
   const isSuperAdmin = user?.isSuperAdminSession === true || user?.isSuperAdminSession === 'true';
   const canShareMedia = isSuperAdmin || user?.role === 'admin' || (allowMediaSharing && canMediaSharing);
   const canUseRestrictedUpload = isSuperAdmin || (canShareMedia && (canRestrictedFileUpload !== false));
   const canUseUnrestrictedUpload = isSuperAdmin || (canShareMedia && allowUnrestrictedFileUpload && canUnrestrictedFileUpload);
   const canAttachFile = isSuperAdmin || canUseRestrictedUpload || canUseUnrestrictedUpload;
   const canUseDelete = isSuperAdmin || user?.role === 'admin' || (allowMessageDelete && canDeleteMessages !== false);
+  const pendingStorageKey = user?.id && friendId ? `pending_msgs_${user.id}_${friendId}` : null;
+  const clearDashboardSessionCache = React.useCallback(() => {
+    if (!user?.id) return;
+    chatStorage?.removeItem(`dashboard_lists_${user.id}`);
+    chatStorage?.removeItem(`dashboard_unread_${user.id}`);
+  }, [user?.id]);
+
+  useEffect(() => {
+    pendingMessagesRef.current = pendingMessages;
+  }, [pendingMessages]);
+
+  const removePendingMessage = React.useCallback((clientId) => {
+    setPendingMessages(prev => prev.filter((m) => m.clientId !== clientId));
+  }, [user?.id, friendId]);
+
+  const flushPendingMessages = React.useCallback(() => {
+    if (!socket || !socket.connected || !isNetworkOnline) return;
+    if (pendingFlushLockRef.current) return;
+
+    const now = Date.now();
+    const candidates = pendingMessagesRef.current.filter((msg) => {
+      // Skip messages that are already in flight and were attempted less than 4 seconds ago
+      if (msg.inFlight && msg.lastAttemptAt && now - msg.lastAttemptAt < 4000) return false;
+      return true;
+    });
+    if (candidates.length === 0) return;
+
+    // Set lock BEFORE any state updates to prevent concurrent executions
+    pendingFlushLockRef.current = true;
+
+    try {
+      setPendingMessages((prev) =>
+        prev.map((msg) =>
+          candidates.some((c) => c.clientId === msg.clientId)
+            ? { ...msg, inFlight: true, lastAttemptAt: now }
+            : msg
+        )
+      );
+
+      // Emit messages to server - only once per message
+      candidates.forEach((msg) => {
+        socket.emit('send_message', {
+          senderId: user.id,
+          receiverId: friendId,
+          text: msg.text,
+          imageUrl: null,
+          imageUrls: [],
+          file: null,
+          files: [],
+          replyTo: msg.replyTo?._id || null
+        });
+      });
+    } finally {
+      // Release lock after a short delay to allow for async operations
+      setTimeout(() => {
+        pendingFlushLockRef.current = false;
+      }, 100);
+    }
+  }, [socket, isNetworkOnline, user?.id, friendId]);
+
+  useEffect(() => {
+    if (!pendingStorageKey) return;
+    try {
+      const stored = chatStorage?.getItem(pendingStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      setPendingMessages(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setPendingMessages([]);
+    }
+  }, [pendingStorageKey]);
+
+  useEffect(() => {
+    if (!pendingStorageKey) return;
+    try {
+      if (pendingMessages.length === 0) {
+        chatStorage?.removeItem(pendingStorageKey);
+      } else {
+        chatStorage?.setItem(pendingStorageKey, JSON.stringify(pendingMessages));
+      }
+    } catch {
+      // Ignore sessionStorage quota/read-only errors
+    }
+  }, [pendingMessages, pendingStorageKey]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      setIsNetworkOnline(true);
+      setTimeout(() => flushPendingMessages(), 150);
+    };
+    const onOffline = () => {
+      setIsNetworkOnline(false);
+      setPendingMessages((prev) => prev.map((m) => ({ ...m, inFlight: false })));
+    };
+
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [flushPendingMessages]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onConnect = () => flushPendingMessages();
+    const onDisconnect = () => setPendingMessages((prev) => prev.map((m) => ({ ...m, inFlight: false })));
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+    };
+  }, [socket, flushPendingMessages]);
+
+  useEffect(() => {
+    if (pendingMessages.length > 0) {
+      flushPendingMessages();
+    }
+  }, [pendingMessages.length, flushPendingMessages]);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
@@ -99,49 +275,167 @@ function ChatRoom() {
 
   useEffect(() => {
     const loadData = async () => {
+      if (!user?.id || !friendId) return;
+
       setIsLoadingChat(true);
+      setMaxVisible(20);
+      firstUnreadIdRef.current = null;
+      hasLoadedOnceRef.current = false;
+
+      // First, try to load from sessionStorage
+      const localCache = loadFromSessionStorage(friendId);
+
+      if (localCache && Array.isArray(localCache.messages)) {
+        console.log(`[ChatRoom] Rendering chat immediately from sessionStorage for friend ${friendId}`);
+
+        // Load cached data immediately
+        setMessages(localCache.messages);
+        setHasMoreMessages(localCache.hasMore || false);
+        setSentCount(localCache.sentCount || 0);
+        setFriendDetails(localCache.friendDetails || null);
+        setUserState(localCache.userState || 'none');
+
+        // Update in-memory cache
+        setMessagesCache(prev => new Map(prev).set(friendId, localCache));
+
+        const cacheAgeMs = Date.now() - (localCache.timestamp || 0);
+        if (cacheAgeMs < CHAT_BACKGROUND_REFRESH_INTERVAL_MS) {
+          console.log(`[ChatRoom][API] Skipping background refresh for friend ${friendId}; sessionStorage is fresh (${Math.round(cacheAgeMs / 1000)}s old)`);
+          if (socket && localCache.userState === 'friend') {
+            socket.emit('mark_read', { userId: user.id, friendId });
+            socket.emit('enter_chat', { userId: user.id, friendId });
+            clearDashboardSessionCache();
+          }
+
+          setIsLoadingChat(false);
+          return;
+        }
+
+        // Now fetch latest messages in background to update cache
+        try {
+          console.log(`[ChatRoom][API] Checking latest messages for friend ${friendId} after sessionStorage render`);
+          const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}?limit=20&paged=1`);
+          if (histRes.ok) {
+            const histPayload = await histRes.json();
+            const latestMessages = Array.isArray(histPayload) ? histPayload : (histPayload.messages || []);
+            const hasMore = Boolean(histPayload.hasMore);
+            const source = Array.isArray(histPayload) ? 'unknown' : (histPayload.source || 'unknown');
+            console.log(`[ChatRoom][API] Latest messages returned from ${source.toUpperCase()} for friend ${friendId}: ${latestMessages.length} messages`);
+
+            if (latestMessages.length > 0) {
+              // Merge with cached messages, keeping newer ones
+              const existingIds = new Set(localCache.messages.map(m => m._id));
+              const newMessages = [
+                ...latestMessages.filter(m => !existingIds.has(m._id)),
+                ...localCache.messages
+              ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+              const newSentCount = newMessages.filter(m => m.sender._id === user.id).length;
+
+              setMessages(newMessages);
+              setHasMoreMessages(hasMore);
+              setSentCount(newSentCount);
+
+              // Update cache and persist
+              const updatedCache = {
+                messages: newMessages,
+                hasMore,
+                sentCount: newSentCount,
+                friendDetails: localCache.friendDetails,
+                userState: localCache.userState
+              };
+
+              setMessagesCache(prev => new Map(prev).set(friendId, updatedCache));
+              persistToSessionStorage(friendId, updatedCache);
+            } else {
+              console.log(`[ChatRoom][API] No newer messages found for friend ${friendId}; keeping sessionStorage data`);
+            }
+          }
+        } catch (err) {
+          console.warn('[ChatRoom] Failed to fetch latest messages:', err);
+          // Keep cached data if fetch fails
+        }
+
+        // Mark as read if friend
+        if (socket && localCache.userState === 'friend') {
+          socket.emit('mark_read', { userId: user.id, friendId });
+          socket.emit('enter_chat', { userId: user.id, friendId });
+          clearDashboardSessionCache();
+        }
+
+        setIsLoadingChat(false);
+        return;
+      }
+
+      // No cache, fetch from API
+      setMessages([]);
+      setHasMoreMessages(false);
       try {
-        console.log(`[ChatRoom] Fetching data for friend: ${friendId}`);
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/friends/${user.id}`);
-        if (!res.ok) throw new Error(`Friends fetch failed: ${res.status}`);
-        const data = await res.json();
-        
-        const isFriend = (data.friends || []).some(f => String(f._id) === String(friendId));
-        const isSentReq = (data.sentRequests || []).some(f => String(f._id) === String(friendId));
-        const isRecvReq = (data.receivedRequests || []).some(f => String(f._id) === String(friendId));
-        const isBlocked = (data.blockedUsers || []).some(f => String(f._id) === String(friendId));
-        
-        if (isBlocked) setUserState('blocked');
-        else if (isFriend) setUserState('friend');
-        else if (isRecvReq) setUserState('received_pending');
-        else if (isSentReq) setUserState('sent_pending');
-        else setUserState('none');
+        console.log(`[ChatRoom] No usable sessionStorage chat cache; fetching relationship/profile/history for friend ${friendId}`);
+        const relationRes = await fetch(`${import.meta.env.VITE_API_URL}/api/users/relationship/${user.id}/${friendId}`);
+        if (!relationRes.ok) throw new Error(`Relationship fetch failed: ${relationRes.status}`);
+        const relation = await relationRes.json();
+
+        const isFriend = relation.isFriend;
+        const isSentReq = relation.isSentReq;
+        const isRecvReq = relation.isRecvReq;
+        const isBlocked = relation.isBlocked;
+
+        let currentUserState = 'none';
+        if (isBlocked) currentUserState = 'blocked';
+        else if (isFriend) currentUserState = 'friend';
+        else if (isRecvReq) currentUserState = 'received_pending';
+        else if (isSentReq) currentUserState = 'sent_pending';
+        setUserState(currentUserState);
 
         const userRes = await fetch(`${import.meta.env.VITE_API_URL}/api/users/user/${friendId}`);
+        let currentFriendDetails = null;
         if (userRes.ok) {
-          const fallbackUser = await userRes.json();
-          setFriendDetails(fallbackUser);
+          currentFriendDetails = await userRes.json();
+          setFriendDetails(currentFriendDetails);
         }
-        
-        const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}`);
+
+        const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}?limit=20&paged=1`);
+        let histData = [];
+        let hasMore = false;
+        let sentCountValue = 0;
         if (histRes.ok) {
-          const histData = await histRes.json();
-          
+          const histPayload = await histRes.json();
+          histData = Array.isArray(histPayload) ? histPayload : (histPayload.messages || []);
+          hasMore = Boolean(histPayload.hasMore);
+          const source = Array.isArray(histPayload) ? 'unknown' : (histPayload.source || 'unknown');
+          console.log(`[ChatRoom][API] Initial messages returned from ${source.toUpperCase()} for friend ${friendId}: ${histData.length} messages`);
+
           // Capture the first unread message from friend BEFORE marking as read
           if (!hasLoadedOnceRef.current) {
             const firstUnread = histData.find(m => m.sender._id === friendId && !m.isRead);
             firstUnreadIdRef.current = firstUnread ? firstUnread._id : null;
             hasLoadedOnceRef.current = true;
           }
-          
-          setMessages(histData);
-          const myMessages = histData.filter(m => m.sender._id === user.id).length;
-          setSentCount(myMessages);
+
+          sentCountValue = histData.filter(m => m.sender._id === user.id).length;
         }
-        
-        if (socket && isFriend) {
+
+        setMessages(histData);
+        setHasMoreMessages(hasMore);
+        setSentCount(sentCountValue);
+
+        // Cache the loaded data and persist to sessionStorage
+        const cacheData = {
+          messages: histData,
+          hasMore,
+          sentCount: sentCountValue,
+          friendDetails: currentFriendDetails,
+          userState: currentUserState
+        };
+
+        setMessagesCache(prev => new Map(prev).set(friendId, cacheData));
+        persistToSessionStorage(friendId, cacheData);
+
+        if (socket && currentUserState === 'friend') {
           socket.emit('mark_read', { userId: user.id, friendId });
           socket.emit('enter_chat', { userId: user.id, friendId });
+          clearDashboardSessionCache();
         }
       } catch (err) {
         console.error('[ChatRoom] Error fetching data:', err);
@@ -180,13 +474,49 @@ function ChatRoom() {
         socket.emit('leave_chat', { userId: user.id, friendId });
       }
     };
-  }, [user, friendId, socket]);
+  }, [user, friendId, socket, clearDashboardSessionCache]);
 
+  // Cleanup expired chat cache entries from sessionStorage
+  useEffect(() => {
+    const cleanupExpiredCache = () => {
+      try {
+        const persistentStorage = window.localStorage;
+        Object.keys(persistentStorage).forEach((key) => {
+          if (key.startsWith('chat_cache_') || key.startsWith('pending_msgs_') || key === `draft_${user?.id}_${friendId}`) {
+            persistentStorage.removeItem(key);
+          }
+        });
 
+        const keys = Object.keys(chatStorage || {});
+        const chatCacheKeys = keys.filter(key => key.startsWith('chat_cache_'));
+        
+        chatCacheKeys.forEach(key => {
+          try {
+            const cached = JSON.parse(chatStorage?.getItem(key));
+            // Remove if older than 24 hours
+            if (!cached.timestamp || (Date.now() - cached.timestamp) > CHAT_CACHE_TTL_MS) {
+              chatStorage?.removeItem(key);
+            }
+          } catch (e) {
+            // Remove corrupted cache entries
+            chatStorage?.removeItem(key);
+          }
+        });
+      } catch (e) {
+        console.warn('Failed to cleanup expired cache:', e);
+      }
+    };
+
+    // Run cleanup on mount and every hour
+    cleanupExpiredCache();
+    const interval = setInterval(cleanupExpiredCache, 60 * 60 * 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (user?.id && friendId) {
-      const draft = localStorage.getItem(`draft_${user.id}_${friendId}`);
+      const draft = chatStorage?.getItem(`draft_${user.id}_${friendId}`);
       if (draft) {
         setInputMessage(draft);
       } else {
@@ -232,6 +562,7 @@ function ChatRoom() {
 
   const confirmBlockUser = async () => {
     if (!blockConfirm) return;
+    setIsBlockingAction(true);
     try {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/block-user`, {
         method: 'POST',
@@ -248,6 +579,7 @@ function ChatRoom() {
       console.error(err);
       alert('Network error while blocking user');
     } finally {
+      setIsBlockingAction(false);
       setBlockConfirm(null);
     }
   };
@@ -279,6 +611,7 @@ function ChatRoom() {
 
   const confirmRemoveFriend = async () => {
     if (!removeConfirm) return;
+    setIsRemovingAction(true);
     try {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/remove-friend`, {
         method: 'POST',
@@ -295,6 +628,7 @@ function ChatRoom() {
       console.error(err);
       alert('Network error');
     } finally {
+      setIsRemovingAction(false);
       setRemoveConfirm(null);
     }
   };
@@ -307,14 +641,56 @@ function ChatRoom() {
         (data.sender._id === user.id && data.receiver._id === friendId) || 
         (data.sender._id === friendId && data.receiver._id === user.id)
       ) {
+        clearDashboardSessionCache();
+        // First, remove any matching pending messages BEFORE adding the real message
+        let pendingClientId = null;
+        if (data.sender._id === user.id && data.receiver._id === friendId) {
+          // This is our message coming back from server, try to find and remove the pending version
+          setPendingMessages((prev) => {
+            const matchIndex = prev.findIndex((p) => {
+              // Match pending messages by text and replyTo
+              const textMatch = p.text === (data.text || '');
+              const replyMatch = 
+                (p.replyTo === null && data.replyTo === null) ||
+                (p.replyTo?._id === data.replyTo?._id);
+              return textMatch && replyMatch;
+            });
+            
+            if (matchIndex !== -1) {
+              pendingClientId = prev[matchIndex].clientId;
+              return prev.filter((_, idx) => idx !== matchIndex);
+            }
+            return prev;
+          });
+        }
+
+        // Now add the real message, but check if it's already in messages (avoid duplicates)
         setMessages((prev) => {
+          // Check if message with this ID already exists
+          if (prev.some(m => m._id === data._id)) {
+            return prev; // Don't add duplicate
+          }
           const newMessages = [...prev, data];
-          setSentCount(newMessages.filter(m => m.sender._id === user.id).length);
+          const newSentCount = newMessages.filter(m => m.sender._id === user.id).length;
+          setSentCount(newSentCount);
+          
+          // Update cache with new message
+          setMessagesCache(prevCache => {
+            const current = prevCache.get(friendId);
+            if (current) {
+              const updated = { ...current, messages: newMessages, sentCount: newSentCount };
+              persistToSessionStorage(friendId, updated);
+              return new Map(prevCache).set(friendId, updated);
+            }
+            return prevCache;
+          });
+          
           return newMessages;
         });
         
         if (data.sender._id === friendId && userState === 'friend') {
            socket.emit('mark_read', { userId: user.id, friendId });
+           clearDashboardSessionCache();
         }
         
         if (chatContainerRef.current) {
@@ -333,7 +709,21 @@ function ChatRoom() {
         (data.sender._id === user.id && data.receiver._id === friendId) || 
         (data.sender._id === friendId && data.receiver._id === user.id)
       ) {
-        setMessages((prev) => prev.map(m => m._id === data._id ? data : m));
+        clearDashboardSessionCache();
+        setMessages((prev) => {
+          const updated = prev.map(m => m._id === data._id ? data : m);
+          // Update cache
+          setMessagesCache(prevCache => {
+            const current = prevCache.get(friendId);
+            if (current) {
+              const cacheUpdated = { ...current, messages: updated };
+              persistToSessionStorage(friendId, cacheUpdated);
+              return new Map(prevCache).set(friendId, cacheUpdated);
+            }
+            return prevCache;
+          });
+          return updated;
+        });
       }
     };
 
@@ -343,7 +733,21 @@ function ChatRoom() {
 
     const handleMessagesRead = ({ byUserId }) => {
       if (byUserId === friendId) {
-        setMessages((prev) => prev.map(m => m.receiver._id === friendId ? { ...m, isRead: true } : m));
+        clearDashboardSessionCache();
+        setMessages((prev) => {
+          const updated = prev.map(m => m.receiver._id === friendId ? { ...m, isRead: true } : m);
+          // Update cache
+          setMessagesCache(prevCache => {
+            const current = prevCache.get(friendId);
+            if (current) {
+              const cacheUpdated = { ...current, messages: updated };
+              persistToSessionStorage(friendId, cacheUpdated);
+              return new Map(prevCache).set(friendId, cacheUpdated);
+            }
+            return prevCache;
+          });
+          return updated;
+        });
       }
     };
 
@@ -360,7 +764,25 @@ function ChatRoom() {
     socket.on('friend_unblocked_you', handleUnblockedYou);
 
     const handleDeleteReceive = ({ messageId }) => {
-      setMessages((prev) => prev.filter(m => m._id !== messageId));
+      clearDashboardSessionCache();
+      setMessages((prev) => {
+        const filtered = prev.filter(m => m._id !== messageId);
+        const newSentCount = filtered.filter(m => m.sender._id === user.id).length;
+        setSentCount(newSentCount);
+        
+        // Update cache
+        setMessagesCache(prevCache => {
+          const current = prevCache.get(friendId);
+          if (current) {
+            const cacheUpdated = { ...current, messages: filtered, sentCount: newSentCount };
+            persistToSessionStorage(friendId, cacheUpdated);
+            return new Map(prevCache).set(friendId, cacheUpdated);
+          }
+          return prevCache;
+        });
+        
+        return filtered;
+      });
     };
     socket.on('message_deleted', handleDeleteReceive);
     
@@ -372,18 +794,36 @@ function ChatRoom() {
       socket.off('message_deleted', handleDeleteReceive);
       socket.off('friend_unblocked_you', handleUnblockedYou);
     };
-  }, [socket, user, friendId, userState]);
+  }, [socket, user, friendId, userState, clearDashboardSessionCache]);
 
   useEffect(() => {
-    setTimeout(() => {
-      // If there's an unread divider, scroll to it; otherwise scroll to bottom
-      if (unreadDividerRef.current) {
-        unreadDividerRef.current.scrollIntoView({ block: 'center' });
-      } else {
+    if (isLoadingChat) return;
+    if (suppressNextAutoScrollRef.current) {
+      suppressNextAutoScrollRef.current = false;
+      return;
+    }
+    // Use requestAnimationFrame to ensure DOM is updated before scrolling
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        // If there's an unread divider, scroll to it; otherwise scroll to bottom
+        if (unreadDividerRef.current) {
+          unreadDividerRef.current.scrollIntoView({ block: 'center' });
+        } else {
+          messagesEndRef.current?.scrollIntoView();
+        }
+      }, 50);
+    });
+  }, [messages.length, pendingMessages.length, isLoadingChat]);
+
+  const handleImageLoad = () => {
+    if (suppressNextAutoScrollRef.current) return;
+    if (chatContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+      if (scrollHeight - scrollTop - clientHeight < 500) {
         messagesEndRef.current?.scrollIntoView();
       }
-    }, 150);
-  }, [messages.length > 0 && messages[0]?._id]); 
+    }
+  }; 
 
   useEffect(() => {
     // Auto-focus input when chat loads and user has permission to type
@@ -713,7 +1153,7 @@ function ChatRoom() {
 
     // Clear inputs immediately to prevent double sending and allow next message composition
     setInputMessage('');
-    localStorage.removeItem(`draft_${user?.id}_${friendId}`);
+    chatStorage?.removeItem(`draft_${user?.id}_${friendId}`);
     setSelectedAttachments([]);
     setFileUploadError(null);
     setReplyingTo(null);
@@ -739,16 +1179,29 @@ function ChatRoom() {
     }
 
     if (attachmentsToSend.length === 0) {
-      socket.emit('send_message', {
-        senderId: user.id,
-        receiverId: friendId,
-        text: textToSend,
-        imageUrl: null,
-        imageUrls: [],
-        file: null,
-        files: [],
-        replyTo: replyObj ? replyObj._id : null
-      });
+      const clientId = `pending-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      setPendingMessages((prev) => [
+        ...prev,
+        {
+          clientId,
+          _id: clientId,
+          sender: { _id: user.id, username: user.username || 'You' },
+          receiver: { _id: friendId },
+          text: textToSend,
+          imageUrl: null,
+          imageUrls: [],
+          file: null,
+          files: [],
+          createdAt: new Date().toISOString(),
+          isRead: false,
+          isEdited: false,
+          replyTo: replyObj || null,
+          isPending: true,
+          inFlight: false,
+          lastAttemptAt: null
+        }
+      ]);
+      setTimeout(() => flushPendingMessages(), 10);
       return;
     }
 
@@ -776,9 +1229,16 @@ function ChatRoom() {
       replyTo: replyObj || null,
       isUploading: true,
       progress: 0,
+      isTempMessage: true, // Mark as temporary to help with deduplication
     };
 
-    setMessages(prev => [...prev, tempMessage]);
+    setMessages(prev => {
+      // Avoid adding duplicate temp messages
+      if (prev.some(m => m._id === tempId)) {
+        return prev;
+      }
+      return [...prev, tempMessage];
+    });
 
     try {
       const progresses = new Array(attachmentsToSend.length).fill(0);
@@ -893,9 +1353,13 @@ function ChatRoom() {
             link.href = url;
             const filename = urls[i].split('/').pop().split('?')[0] || `image_${i+1}.jpg`;
             link.setAttribute('download', filename);
-            document.body.appendChild(link);
-            link.click();
-            link.parentNode.removeChild(link);
+            if (document.body) {
+              document.body.appendChild(link);
+              link.click();
+              link.parentNode.removeChild(link);
+            } else {
+              console.warn('Document body not ready for download');
+            }
             window.URL.revokeObjectURL(url);
             // Small delay to prevent browser from blocking multiple downloads
             await new Promise(r => setTimeout(r, 300));
@@ -1017,12 +1481,80 @@ function ChatRoom() {
 
   const handleScroll = (e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.target;
+    if (scrollTop < 80 && hasMoreMessages && !isLoadingOlder && !isLoadingChat) {
+      loadOlderMessages();
+    }
     if (scrollHeight - scrollTop - clientHeight > 150) {
       setShowScrollButton(true);
     } else {
       setShowScrollButton(false);
     }
     setActiveMenuId(null);
+  };
+
+  const loadOlderMessages = async () => {
+    if (isLoadingOlder || !hasMoreMessages || messages.length === 0) return;
+    const container = chatContainerRef.current;
+    const previousScrollHeight = container?.scrollHeight || 0;
+    const oldestMessage = messages[0];
+    if (!oldestMessage?.createdAt) return;
+
+    setIsLoadingOlder(true);
+    try {
+      const url = `${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}?limit=20&paged=1&before=${encodeURIComponent(oldestMessage.createdAt)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Older messages fetch failed: ${res.status}`);
+      const payload = await res.json();
+      const olderMessages = Array.isArray(payload) ? payload : (payload.messages || []);
+      const source = Array.isArray(payload) ? 'unknown' : (payload.source || 'unknown');
+      console.log(`[ChatRoom][API] Older messages returned from ${source.toUpperCase()} for friend ${friendId}: ${olderMessages.length} messages`);
+      if (olderMessages.length) {
+        suppressNextAutoScrollRef.current = true;
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((msg) => msg._id));
+          const newMessages = [...olderMessages.filter((msg) => !existingIds.has(msg._id)), ...prev];
+          const newSentCount = newMessages.filter(m => m.sender._id === user.id).length;
+
+          // Update cache with all messages (including newly loaded ones)
+          setMessagesCache(prevCache => {
+            const current = prevCache.get(friendId);
+            if (current) {
+              const updated = {
+                ...current,
+                messages: newMessages,
+                sentCount: newSentCount,
+                hasMore: Boolean(payload.hasMore)
+              };
+              // Persist to sessionStorage
+              try {
+                chatStorage?.setItem(`chat_cache_${friendId}`, JSON.stringify({
+                  ...updated,
+                  timestamp: Date.now()
+                }));
+                console.log(`[ChatRoom][sessionStorage] SAVED older messages for friend ${friendId}: ${newMessages.length} total messages`);
+              } catch (e) {
+                console.warn('Failed to persist cache to sessionStorage:', e);
+              }
+              return new Map(prevCache).set(friendId, updated);
+            }
+            return prevCache;
+          });
+
+          setSentCount(newSentCount);
+          return newMessages;
+        });
+        requestAnimationFrame(() => {
+          if (container) {
+            container.scrollTop = container.scrollHeight - previousScrollHeight;
+          }
+        });
+      }
+      setHasMoreMessages(Boolean(payload.hasMore));
+    } catch (err) {
+      console.error('[ChatRoom] Error loading older messages:', err);
+    } finally {
+      setIsLoadingOlder(false);
+    }
   };
 
   const scrollToOriginal = (msgId) => {
@@ -1039,27 +1571,60 @@ function ChatRoom() {
 
   const isOnline = onlineUsers?.some(ou => (ou.userId || ou) === friendId);
 
+  const sentMedia = React.useMemo(() => {
+    if (!isViewProfileOpen) return [];
+    return messages.filter(m => m.sender._id === user?.id && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0));
+  }, [messages, user?.id, isViewProfileOpen]);
+  
+  const receivedMedia = React.useMemo(() => {
+    if (!isViewProfileOpen) return [];
+    return messages.filter(m => m.sender._id === friendId && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0));
+  }, [messages, friendId, isViewProfileOpen]);
+
   const allChatImages = React.useMemo(() => {
+    if (!isViewProfileOpen) return [];
     let imgs = [];
     messages.forEach(msg => {
       if (msg.imageUrl) imgs.push(msg.imageUrl);
       if (msg.imageUrls) imgs.push(...msg.imageUrls);
     });
     return imgs;
-  }, [messages]);
-
-  const sentMedia = React.useMemo(() => messages.filter(m => m.sender._id === user?.id && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, user?.id]);
-  const receivedMedia = React.useMemo(() => messages.filter(m => m.sender._id === friendId && (m.imageUrl || m.imageUrls?.length > 0 || m.file || m.files?.length > 0)), [messages, friendId]);
+  }, [messages, isViewProfileOpen]);
 
   const openImageGallery = (url, customImages = null) => {
-    const imagesToUse = customImages || allChatImages;
+    let imagesToUse = customImages;
+    if (!imagesToUse) {
+      imagesToUse = [];
+      messages.forEach(msg => {
+        if (msg.imageUrl) imagesToUse.push(msg.imageUrl);
+        if (msg.imageUrls) imagesToUse.push(...msg.imageUrls);
+      });
+    }
     const idx = imagesToUse.indexOf(url);
     setGalleryState({ isOpen: true, initialIndex: idx !== -1 ? idx : 0, images: imagesToUse });
   };
 
+  const displayedMessages = React.useMemo(() => {
+    // Combine messages and pending messages, then deduplicate
+    const allMessages = [...messages, ...pendingMessages];
+    const seenIds = new Set();
+    const deduplicated = [];
+    
+    for (const msg of allMessages) {
+      // For pending messages, use clientId; for real messages, use _id
+      const uniqueId = msg.clientId || msg._id;
+      if (!seenIds.has(uniqueId)) {
+        seenIds.add(uniqueId);
+        deduplicated.push(msg);
+      }
+    }
+    
+    return deduplicated.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  }, [messages, pendingMessages]);
+
   return (
     <div className="chat-container" onClick={() => setActiveMenuId(null)}>
-      <div className="glass-panel chat-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(13,17,23,0.97)' }} onClick={(e) => e.stopPropagation()}>
+      <div className="glass-panel chat-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-color)', borderBottom: '1px solid var(--glass-border)' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
           <div style={{ position: 'relative' }}>
             <div 
@@ -1108,7 +1673,7 @@ function ChatRoom() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
               boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
             }}
@@ -1120,28 +1685,30 @@ function ChatRoom() {
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
               <button
+                disabled={isBlockingAction}
                 onClick={confirmBlockUser}
                 style={{
                   width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
                   background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
                   fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
                   boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
-                  transition: 'transform 0.15s ease'
+                  transition: 'transform 0.15s ease',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}
-                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
-                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                onMouseDown={(e) => !isBlockingAction && (e.currentTarget.style.transform = 'scale(0.97)')}
+                onMouseUp={(e) => !isBlockingAction && (e.currentTarget.style.transform = 'scale(1)')}
               >
-                Block User
+                {isBlockingAction ? <span className="spinner" style={{ width: '15px', height: '15px', marginRight: 0, borderWidth: '2px' }}></span> : "Block User"}
               </button>
               <button
                 onClick={() => setBlockConfirm(null)}
                 style={{
-                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  width: '100%', padding: '0.7rem', border: '1px solid var(--glass-border)',
                   borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
                   fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
                   transition: 'background 0.2s ease'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--glass-border)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 Cancel
@@ -1160,7 +1727,7 @@ function ChatRoom() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
               boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
             }}
@@ -1172,28 +1739,30 @@ function ChatRoom() {
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
               <button
+                disabled={isRemovingAction}
                 onClick={confirmRemoveFriend}
                 style={{
                   width: '100%', padding: '0.7rem', border: 'none', borderRadius: '8px',
                   background: 'linear-gradient(135deg, #f85149, #991b1b)', color: 'white',
                   fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer',
                   boxShadow: '0 4px 12px rgba(248, 81, 73, 0.3)',
-                  transition: 'transform 0.15s ease'
+                  transition: 'transform 0.15s ease',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}
-                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
-                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                onMouseDown={(e) => !isRemovingAction && (e.currentTarget.style.transform = 'scale(0.97)')}
+                onMouseUp={(e) => !isRemovingAction && (e.currentTarget.style.transform = 'scale(1)')}
               >
-                Remove Friend
+                {isRemovingAction ? <span className="spinner" style={{ width: '15px', height: '15px', marginRight: 0, borderWidth: '2px' }}></span> : "Remove Friend"}
               </button>
               <button
                 onClick={() => setRemoveConfirm(null)}
                 style={{
-                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  width: '100%', padding: '0.7rem', border: '1px solid var(--glass-border)',
                   borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
                   fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
                   transition: 'background 0.2s ease'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--glass-border)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 Cancel
@@ -1212,7 +1781,7 @@ function ChatRoom() {
           <div 
             onClick={(e) => e.stopPropagation()}
             style={{ 
-              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)', 
+              background: 'var(--panel-bg)', border: '1px solid var(--danger)', 
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px', 
               boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center' 
             }}
@@ -1240,12 +1809,12 @@ function ChatRoom() {
               <button 
                 onClick={() => setDeleteConfirmMsg(null)}
                 style={{ 
-                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)', 
+                  width: '100%', padding: '0.7rem', border: '1px solid var(--glass-border)', 
                   borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)', 
                   fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
                   transition: 'background 0.2s ease'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--glass-border)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 Cancel
@@ -1301,15 +1870,29 @@ function ChatRoom() {
                <span className="spinner" style={{ borderTopColor: 'var(--accent)', width: '30px', height: '30px', borderWidth: '3px' }}></span>
                <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Fetching conversation...</div>
             </div>
-          ) : messages.length === 0 ? (
+          ) : displayedMessages.length === 0 ? (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>
               No messages yet. Send a message to start chatting!
             </div>
-          ) : messages.map((msg, idx) => {
+          ) : (
+            <>
+              {isLoadingOlder && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '0.35rem 0' }}>
+                  <span className="spinner" style={{ borderTopColor: 'var(--accent)', width: '14px', height: '14px', borderWidth: '2px', marginRight: 0 }}></span>
+                  Loading older messages...
+                </div>
+              )}
+              {!hasMoreMessages && displayedMessages.length >= 20 && (
+                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.72rem', opacity: 0.7, padding: '0.2rem 0' }}>
+                  Beginning of conversation
+                </div>
+              )}
+              {displayedMessages.map((msg, idx) => {
             const isSelf = msg.sender._id === user.id;
-            const showMenu = activeMenuId === msg._id;
+            const isPending = msg.isPending === true;
+            const showMenu = !isPending && activeMenuId === msg._id;
             const currentDateLabel = getDateLabel(msg.createdAt);
-            const prevDateLabel = idx > 0 ? getDateLabel(messages[idx - 1].createdAt) : null;
+            const prevDateLabel = idx > 0 ? getDateLabel(displayedMessages[idx - 1].createdAt) : null;
             const showDateLabel = currentDateLabel !== prevDateLabel;
             
             const isFirstUnread = firstUnreadIdRef.current && msg._id === firstUnreadIdRef.current;
@@ -1339,36 +1922,38 @@ function ChatRoom() {
                   onTouchMove={handleTouchMove}
                   onTouchEnd={(e) => handleTouchEnd(e, msg)}
                 >
-                <button 
-                  onClick={(e) => { e.stopPropagation(); setActiveMenuId(showMenu ? null : msg._id); }}
-                  style={{
-                    position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.15)', border: 'none', borderRadius: '50%',
-                    width: '18px', height: '18px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5, zIndex: 1
-                  }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </button>
+                {!isPending && (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setActiveMenuId(showMenu ? null : msg._id); }}
+                    style={{
+                      position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.15)', border: 'none', borderRadius: '50%',
+                      width: '18px', height: '18px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5, zIndex: 1
+                    }}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                  </button>
+                )}
 
                 {showMenu && (
                   <div style={{
-                    position: 'absolute', top: '24px', right: '4px', background: 'rgba(33, 38, 45, 0.98)', border: '1px solid var(--glass-border)',
+                    position: 'absolute', top: '24px', right: '4px', background: 'var(--panel-bg)', border: '1px solid var(--glass-border)',
                     borderRadius: '8px', zIndex: 20, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
                     width: 'max-content', minWidth: '100px', backdropFilter: 'blur(10px)'
                   }}>
-                    <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Copy</button>
+                    <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Copy</button>
                     {((msg.imageUrls?.length || 0) + (msg.imageUrl ? 1 : 0) > 1) && (
-                      <button onClick={() => handleDownloadAll(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Download All</button>
+                      <button onClick={() => handleDownloadAll(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Download All</button>
                     )}
                     {(userState === 'friend' || userState.includes('pending') || isSuperAdmin || user?.role === 'admin') && (
                       <>
                         <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Reply</button>
                         {isSelf && (
-                          <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
+                          <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
                         )}
                         {canUseDelete && (isSelf || user?.role === 'admin' || isSuperAdmin) && (
-                          <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: '#f85149', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
+                          <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
                         )}
                       </>
                     )}
@@ -1401,12 +1986,12 @@ function ChatRoom() {
                   <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '4px', position: 'relative', maxWidth: '320px' }}>
                     {msg.imageUrl && (
                       <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', width: '100%', position: 'relative', background: 'rgba(0,0,0,0.1)' }}>
-                        <img src={msg.imageUrl} style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer' }} onClick={() => !msg.isUploading && openImageGallery(msg.imageUrl)} />
+                        <img src={msg.imageUrl} onLoad={handleImageLoad} style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer' }} onClick={() => !msg.isUploading && openImageGallery(msg.imageUrl)} />
                       </div>
                     )}
                     {msg.imageUrls && msg.imageUrls.map((url, i) => (
                       <div key={i} style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', width: msg.imageUrls.length === 1 ? '100%' : 'calc(50% - 2.5px)', position: 'relative', flexGrow: 1, background: 'rgba(0,0,0,0.1)' }}>
-                        <img src={url} style={{ width: '100%', height: msg.imageUrls.length === 1 ? 'auto' : '150px', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer', opacity: msg.isUploading || msg.uploadError ? 0.6 : 1 }} onClick={() => !msg.isUploading && openImageGallery(url)} />
+                        <img src={url} onLoad={handleImageLoad} style={{ width: '100%', height: msg.imageUrls.length === 1 ? 'auto' : '150px', maxHeight: '300px', objectFit: 'cover', display: 'block', cursor: 'pointer', opacity: msg.isUploading || msg.uploadError ? 0.6 : 1 }} onClick={() => !msg.isUploading && openImageGallery(url)} />
                       </div>
                     ))}
                     {msg.isUploading && msg.imageUrls?.length > 0 && (
@@ -1452,14 +2037,21 @@ function ChatRoom() {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '0.2rem', gap: '0.35rem' }}>
                   {msg.isEdited && <span style={{ fontSize: '0.55rem', opacity: 0.6 }}>(edited)</span>}
                   <span style={{ fontSize: '0.62rem', opacity: isSelf ? 0.7 : 0.45 }}>{formatTime(msg.createdAt)}</span>
+                  {isSelf && isPending && (
+                    <span style={{ fontSize: '0.55rem', background: 'rgba(255,255,255,0.18)', color: 'white', padding: '1px 5px', borderRadius: '6px', fontWeight: 'bold' }}>
+                      Sending...
+                    </span>
+                  )}
                   {isSelf && msg.isRead && (
                     <span style={{ fontSize: '0.55rem', background: 'var(--success)', color: 'white', padding: '1px 5px', borderRadius: '6px', fontWeight: 'bold' }}>Seen</span>
                   )}
                 </div>
               </div>
-            </React.Fragment>
+              </React.Fragment>
             );
           })}
+            </>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -1641,9 +2233,9 @@ function ChatRoom() {
                       setInputMessage(val);
                       if (!editingMessage) {
                         if (val.trim() === '') {
-                          localStorage.removeItem(`draft_${user?.id}_${friendId}`);
+                          chatStorage?.removeItem(`draft_${user?.id}_${friendId}`);
                         } else {
-                          localStorage.setItem(`draft_${user?.id}_${friendId}`, val);
+                          chatStorage?.setItem(`draft_${user?.id}_${friendId}`, val);
                         }
                       }
                       

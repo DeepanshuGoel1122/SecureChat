@@ -182,3 +182,12 @@
     border-right-color: var(--border);
   }
 }
+
+/* Subtle hover effect for chat list items */
+.chat-list-item {
+  transition: background-color 0.2s ease;
+}
+
+.chat-list-item:hover {
+  background-color: var(--accent-bg) !important;
+}

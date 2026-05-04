@@ -1,16 +1,46 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Message = require('../models/Message');
+const {
+  CACHE_TTL,
+  cacheKey,
+  getJson,
+  invalidateUser,
+  setJson,
+} = require('../utils/cache');
 
 const router = express.Router();
+const ObjectId = mongoose.Types.ObjectId;
+const getClearedAt = (clearedChats, partnerId) => {
+  if (!clearedChats) return new Date(0);
+  if (typeof clearedChats.get === 'function') return clearedChats.get(partnerId) || new Date(0);
+  return clearedChats[partnerId] || new Date(0);
+};
+
+const clampLimit = (value, fallback = 20, max = 50) => Math.min(Math.max(parseInt(value, 10) || fallback, 1), max);
+const clampOffset = (value) => Math.max(parseInt(value, 10) || 0, 0);
+const toSafeUser = (u) => ({
+  _id: u._id,
+  username: u.username,
+  firstName: u.firstName,
+  lastName: u.lastName,
+  profilePic: u.profilePic,
+  bio: u.bio,
+});
 
 // Search users
 router.get('/search', async (req, res) => {
   try {
     const { q, userId } = req.query;
     if (!q) return res.json([]);
+    const limit = clampLimit(req.query.limit, 20, 25);
+    const offset = clampOffset(req.query.offset);
+    const searchKey = cacheKey('search', userId, q.trim().toLowerCase(), limit, offset);
+    const cached = await getJson(searchKey);
+    if (cached) return res.json(cached);
     
-    const reqUser = await User.findById(userId).select('blockedUsers');
+    const reqUser = await User.findById(userId).select('blockedUsers').lean();
     
     let users = await User.find({
       $or: [
@@ -18,17 +48,23 @@ router.get('/search', async (req, res) => {
         { firstName: { $regex: q, $options: 'i' } },
         { lastName: { $regex: q, $options: 'i' } }
       ]
-    }).select('_id username firstName lastName profilePic bio blockedUsers');
+    }).select('_id username firstName lastName profilePic bio blockedUsers').limit(limit + offset + 1).lean();
     
     // Ignore self, users who blocked us, and users we blocked
     users = users.filter(u => 
       u._id.toString() !== userId && 
-      !u.blockedUsers.includes(userId) && 
-      !reqUser.blockedUsers.includes(u._id.toString())
+      !u.blockedUsers.some((id) => String(id) === String(userId)) && 
+      !reqUser?.blockedUsers?.some((id) => String(id) === String(u._id))
     );
     
-    const safeUsers = users.map(u => ({ _id: u._id, username: u.username, firstName: u.firstName, lastName: u.lastName, profilePic: u.profilePic, bio: u.bio }));
-    res.json(safeUsers);
+    const visibleUsers = users.slice(offset, offset + limit);
+    const result = {
+      users: visibleUsers.map(toSafeUser),
+      hasMore: users.length > offset + limit,
+      nextOffset: offset + visibleUsers.length,
+    };
+    await setJson(searchKey, result, CACHE_TTL.SEARCH);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -55,9 +91,11 @@ router.post('/add-friend', async (req, res) => {
     
     await sender.save();
     await receiver.save();
+    await Promise.all([invalidateUser(userId), invalidateUser(friendId)]);
     
     // Notify receiver in real-time
-    req.io.to(friendId).emit('friend_request_received');
+    const safeSender = await User.findById(userId).select('_id username firstName lastName profilePic bio').lean();
+    req.io.to(friendId).emit('friend_request_received', { requester: safeSender });
     
     res.json({ message: 'Friend request sent' });
   } catch (err) {
@@ -80,6 +118,7 @@ router.post('/accept-request', async (req, res) => {
     
     await user.save();
     await requester.save();
+    await Promise.all([invalidateUser(userId), invalidateUser(requesterId)]);
     res.json({ message: 'Friend request accepted' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -92,6 +131,7 @@ router.post('/reject-request', async (req, res) => {
     const { userId, requesterId } = req.body;
     await User.findByIdAndUpdate(userId, { $pull: { receivedRequests: requesterId } });
     await User.findByIdAndUpdate(requesterId, { $pull: { sentRequests: userId } });
+    await Promise.all([invalidateUser(userId), invalidateUser(requesterId)]);
     res.json({ message: 'Friend request rejected' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -104,6 +144,7 @@ router.post('/cancel-request', async (req, res) => {
     const { userId, receiverId } = req.body;
     await User.findByIdAndUpdate(userId, { $pull: { sentRequests: receiverId } });
     await User.findByIdAndUpdate(receiverId, { $pull: { receivedRequests: userId } });
+    await Promise.all([invalidateUser(userId), invalidateUser(receiverId)]);
     res.json({ message: 'Friend request cancelled' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -116,6 +157,7 @@ router.post('/remove-friend', async (req, res) => {
     const { userId, friendId } = req.body;
     await User.findByIdAndUpdate(userId, { $pull: { friends: friendId } });
     await User.findByIdAndUpdate(friendId, { $pull: { friends: userId } });
+    await Promise.all([invalidateUser(userId), invalidateUser(friendId)]);
     res.json({ message: 'Friend removed' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -140,6 +182,7 @@ router.post('/block-user', async (req, res) => {
     blocked.sentRequests.pull(userId);
     blocked.receivedRequests.pull(userId);
     await blocked.save();
+    await Promise.all([invalidateUser(userId), invalidateUser(blockId)]);
     
     res.json({ message: 'User blocked' });
   } catch (err) {
@@ -158,6 +201,7 @@ router.post('/unblock-user', async (req, res) => {
     await User.findByIdAndUpdate(blockId, {
       $addToSet: { friends: userId }
     });
+    await Promise.all([invalidateUser(userId), invalidateUser(blockId)]);
     res.json({ message: 'User unblocked' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -167,49 +211,241 @@ router.post('/unblock-user', async (req, res) => {
 // Get user profile explicitly
 router.get('/user/:id', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('_id username firstName lastName profilePic bio canDeleteMessages deleteManuallyDisabled canMediaSharing mediaSharingManuallyDisabled canUploadFiles canRestrictedFileUpload canUnrestrictedFileUpload unrestrictedFileSharingManuallyDisabled maxFileSize allowedFileTypes');
+    const key = cacheKey('user', req.params.id, 'profile');
+    const cached = await getJson(key);
+    if (cached) return res.json(cached);
+
+    const user = await User.findById(req.params.id)
+      .select('_id username firstName lastName profilePic bio canDeleteMessages deleteManuallyDisabled canMediaSharing mediaSharingManuallyDisabled canUploadFiles canRestrictedFileUpload canUnrestrictedFileUpload unrestrictedFileSharingManuallyDisabled maxFileSize allowedFileTypes')
+      .lean();
+    await setJson(key, user, CACHE_TTL.USER_PROFILE);
     res.json(user);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Get consolidated structural data 
+router.get('/relationship/:userId/:friendId', async (req, res) => {
+  try {
+    const { userId, friendId } = req.params;
+    const key = cacheKey('user', userId, 'relationship', friendId);
+    const cached = await getJson(key);
+    if (cached) return res.json(cached);
+
+    const user = await User.findById(userId)
+      .select('friends sentRequests receivedRequests blockedUsers')
+      .lean();
+
+    const result = {
+      isFriend: user?.friends?.some((id) => String(id) === String(friendId)) || false,
+      isSentReq: user?.sentRequests?.some((id) => String(id) === String(friendId)) || false,
+      isRecvReq: user?.receivedRequests?.some((id) => String(id) === String(friendId)) || false,
+      isBlocked: user?.blockedUsers?.some((id) => String(id) === String(friendId)) || false,
+    };
+    await setJson(key, result, CACHE_TTL.USER_LISTS);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+router.get('/active-chats/:userId', async (req, res) => {
+  try {
+    const startedAt = Date.now();
+    const userId = req.params.userId;
+    const activeLimit = clampLimit(req.query.activeLimit, 20, 50);
+    const activeOffset = clampOffset(req.query.activeOffset);
+    const responseKey = cacheKey('user', userId, 'active-chats-response', activeLimit, activeOffset);
+    const cachedResponse = await getJson(responseKey);
+    if (cachedResponse) {
+      console.log(`[users/active-chats] ${userId}: REDIS response cache hit (${Date.now() - startedAt}ms)`);
+      res.set('X-Cache-Source', 'redis');
+      return res.json({ ...cachedResponse, source: 'redis' });
+    }
+
+    const latestMessagesKey = cacheKey('user', userId, 'latestMessages', 'per-partner');
+    let latestMessagePerPartner = await getJson(latestMessagesKey);
+
+    if (!latestMessagePerPartner) {
+      console.log(`[users/active-chats] ${userId}: latest messages Redis miss; running MongoDB aggregation`);
+      const userObjectId = new ObjectId(userId);
+      latestMessagePerPartner = await Message.aggregate([
+        { $match: { $or: [{ sender: userObjectId }, { receiver: userObjectId }] } },
+        {
+          $project: {
+            createdAt: 1,
+            partner: {
+              $cond: [{ $eq: ['$sender', userObjectId] }, '$receiver', '$sender']
+            }
+          }
+        },
+        { $group: { _id: '$partner', latestMessageAt: { $max: '$createdAt' } } },
+        { $sort: { latestMessageAt: -1 } }
+      ]);
+      await setJson(latestMessagesKey, latestMessagePerPartner, CACHE_TTL.USER_LISTS);
+    } else {
+      console.log(`[users/active-chats] ${userId}: latest messages REDIS hit`);
+    }
+
+    const user = await User.findById(userId).select('clearedChats').lean();
+    const visibleLatest = latestMessagePerPartner.filter((chatInfo) => {
+      const partnerIdStr = String(chatInfo._id);
+      const clearedAt = getClearedAt(user?.clearedChats, partnerIdStr);
+      return new Date(chatInfo.latestMessageAt) > new Date(clearedAt);
+    });
+
+    const activePage = visibleLatest.slice(activeOffset, activeOffset + activeLimit);
+    const partnerIds = activePage.map((m) => m._id);
+    const partners = partnerIds.length
+      ? await User.find({ _id: { $in: partnerIds } })
+          .select('_id username firstName lastName profilePic bio')
+          .lean()
+      : [];
+    const partnerMap = new Map(partners.map((p) => [String(p._id), p]));
+
+    const activeChats = activePage
+      .map((chatInfo) => {
+        const partner = partnerMap.get(String(chatInfo._id));
+        if (!partner) return null;
+        return {
+          _id: partner._id,
+          username: partner.username,
+          firstName: partner.firstName,
+          lastName: partner.lastName,
+          profilePic: partner.profilePic,
+          bio: partner.bio,
+          hasActiveChat: true,
+          latestMessageAt: chatInfo.latestMessageAt
+        };
+      })
+      .filter(Boolean);
+
+    const result = {
+      activeChats,
+      source: 'db',
+      pagination: {
+        activeChats: {
+          hasMore: visibleLatest.length > activeOffset + activeLimit,
+          nextOffset: activeOffset + activeChats.length,
+        },
+      },
+    };
+
+    await setJson(responseKey, result, CACHE_TTL.USER_LISTS);
+    console.log(`[users/active-chats] ${userId}: built ${activeChats.length} active chats in ${Date.now() - startedAt}ms`);
+    res.set('X-Cache-Source', 'db');
+    res.json(result);
+  } catch (err) {
+    console.error('Active chats error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get consolidated structural data - OPTIMIZED WITH BETTER CACHING
 router.get('/friends/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
-    const user = await User.findById(userId)
-      .populate('friends', '_id username firstName lastName profilePic bio')
-      .populate('sentRequests', '_id username firstName lastName profilePic bio')
-      .populate('receivedRequests', '_id username firstName lastName profilePic bio')
-      .populate('blockedUsers', '_id username firstName lastName profilePic bio');
-    
-    const messages = await Message.find({
-      $or: [{ sender: userId }, { receiver: userId }]
-    }).populate('sender', '_id username firstName lastName profilePic bio').populate('receiver', '_id username firstName lastName profilePic bio');
-    
-    const partnerMap = new Map();
-    messages.forEach(msg => {
-      const isSender = msg.sender._id.toString() === userId;
-      const partner = isSender ? msg.receiver : msg.sender;
-      if (!partner) return;
-      const pId = partner._id.toString();
-      
-      
+    const activeLimit = clampLimit(req.query.activeLimit, 20, 50);
+    const activeOffset = clampOffset(req.query.activeOffset);
+    const friendsLimit = clampLimit(req.query.friendsLimit, 20, 50);
+    const friendsOffset = clampOffset(req.query.friendsOffset);
+    const requestsLimit = clampLimit(req.query.requestsLimit, 20, 50);
+    const blockedLimit = clampLimit(req.query.blockedLimit, 20, 50);
+    const includeActiveChats = req.query.includeActive !== '0';
+    const responseKey = cacheKey('user', userId, 'friends-response', includeActiveChats ? 1 : 0, activeLimit, activeOffset, friendsLimit, friendsOffset, requestsLimit, blockedLimit);
+    const cachedResponse = await getJson(responseKey);
+    if (cachedResponse) {
+      console.log(`[users/friends] ${userId}: REDIS response cache hit`);
+      res.set('X-Cache-Source', 'redis');
+      return res.json({ ...cachedResponse, source: 'redis' });
+    }
 
-      if (!partnerMap.has(pId)) {
-        partnerMap.set(pId, { _id: partner._id, username: partner.username, firstName: partner.firstName, lastName: partner.lastName, profilePic: partner.profilePic, bio: partner.bio, latestMsg: msg });
-      } else {
-        if (new Date(msg.createdAt) > new Date(partnerMap.get(pId).latestMsg.createdAt)) {
-          partnerMap.get(pId).latestMsg = msg;
-        }
-      }
-    });
+    console.log(`[users/friends] ${userId}: response cache miss; assembling lists`);
+
+    // ✅ OPTIMIZATION: Separate cache for base lists (no pagination)
+    const baseListsKey = cacheKey('user', userId, 'lists', 'base');
+    const cachedBaseLists = await getJson(baseListsKey);
+
+    let user, allFriendsRaw, sentRaw, receivedRaw, blockedRaw;
+
+    if (cachedBaseLists) {
+      console.log(`[users/friends] ${userId}: base lists REDIS hit`);
+      allFriendsRaw = cachedBaseLists.allFriends;
+      sentRaw = cachedBaseLists.sentRequests;
+      receivedRaw = cachedBaseLists.receivedRequests;
+      blockedRaw = cachedBaseLists.blockedUsers;
+      user = cachedBaseLists.user;
+    } else {
+      console.log(`[users/friends] ${userId}: base lists Redis miss; querying MongoDB`);
+      user = await User.findById(userId)
+        .populate('friends', '_id username firstName lastName profilePic bio')
+        .populate('sentRequests', '_id username firstName lastName profilePic bio')
+        .populate('receivedRequests', '_id username firstName lastName profilePic bio')
+        .populate('blockedUsers', '_id username firstName lastName profilePic bio')
+        .lean();
+
+      allFriendsRaw = user.friends.map(toSafeUser);
+      sentRaw = user.sentRequests.map(toSafeUser);
+      receivedRaw = user.receivedRequests.map(toSafeUser);
+      blockedRaw = user.blockedUsers.map(toSafeUser);
+
+      // Cache base lists for 5 minutes
+      await setJson(baseListsKey, {
+        user: { clearedChats: user.clearedChats },
+        allFriends: allFriendsRaw,
+        sentRequests: sentRaw,
+        receivedRequests: receivedRaw,
+        blockedUsers: blockedRaw,
+      }, CACHE_TTL.USER_LISTS);
+    }
+
+    // ✅ OPTIMIZATION: Separate cache for aggregation result (expensive operation)
+    const latestMessagesKey = cacheKey('user', userId, 'latestMessages', 'per-partner');
+    let latestMessagePerPartner = includeActiveChats ? await getJson(latestMessagesKey) : [];
+
+    if (includeActiveChats && !latestMessagePerPartner) {
+      console.log(`[users/friends] ${userId}: latest messages Redis miss; running MongoDB aggregation`);
+      const userObjectId = new ObjectId(userId);
+      
+      // Get ALL latest messages (no pagination here!)
+      latestMessagePerPartner = await Message.aggregate([
+        { $match: { $or: [{ sender: userObjectId }, { receiver: userObjectId }] } },
+        {
+          $project: {
+            createdAt: 1,
+            partner: {
+              $cond: [{ $eq: ['$sender', userObjectId] }, '$receiver', '$sender']
+            }
+          }
+        },
+        { $group: { _id: '$partner', latestMessageAt: { $max: '$createdAt' } } },
+        { $sort: { latestMessageAt: -1 } }
+      ]);
+
+      // Cache for 5 minutes
+      await setJson(latestMessagesKey, latestMessagePerPartner, CACHE_TTL.USER_LISTS);
+    } else if (includeActiveChats) {
+      console.log(`[users/friends] ${userId}: latest messages REDIS hit`);
+    }
+
+    // Pagination happens IN-MEMORY from cached data (INSTANT!) ⚡
+    const partnerIds = latestMessagePerPartner.map((m) => m._id);
+    const partners = partnerIds.length
+      ? await User.find({ _id: { $in: partnerIds } })
+          .select('_id username firstName lastName profilePic bio')
+          .lean()
+      : [];
+
+    const partnerMap = new Map(partners.map((p) => [String(p._id), p]));
 
     const activeChats = [];
-    partnerMap.forEach(partner => {
-      const clearedAt = user.clearedChats?.get(partner._id.toString()) || new Date(0);
-      if (new Date(partner.latestMsg.createdAt) > clearedAt) {
+    latestMessagePerPartner.forEach((chatInfo) => {
+      const partnerIdStr = String(chatInfo._id);
+      const partner = partnerMap.get(partnerIdStr);
+      if (!partner) return;
+
+      const clearedAt = getClearedAt(user.clearedChats, partnerIdStr);
+      if (new Date(chatInfo.latestMessageAt) > new Date(clearedAt)) {
         activeChats.push({
           _id: partner._id,
           username: partner.username,
@@ -218,26 +454,49 @@ router.get('/friends/:userId', async (req, res) => {
           profilePic: partner.profilePic,
           bio: partner.bio,
           hasActiveChat: true,
-          latestMessageAt: partner.latestMsg.createdAt
+          latestMessageAt: chatInfo.latestMessageAt
         });
       }
     });
 
-    const allFriends = user.friends.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
-    const sentReq = user.sentRequests.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
-    const recvReq = user.receivedRequests.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
-    const blocked = user.blockedUsers.map(f => ({ _id: f._id, username: f.username, firstName: f.firstName, lastName: f.lastName, profilePic: f.profilePic, bio: f.bio }));
+    // Pagination from full cached data (no DB query!)
+    const allFriends = allFriendsRaw.slice(friendsOffset, friendsOffset + friendsLimit);
+    const sentReq = sentRaw.slice(0, requestsLimit);
+    const recvReq = receivedRaw.slice(0, requestsLimit);
+    const blocked = blockedRaw.slice(0, blockedLimit);
 
     activeChats.sort((a, b) => new Date(b.latestMessageAt) - new Date(a.latestMessageAt));
+    const activeChatsPage = activeChats.slice(activeOffset, activeOffset + activeLimit);
 
-    res.json({ 
+    const result = { 
       friends: allFriends, 
-      activeChats, 
+      activeChats: activeChatsPage, 
       sentRequests: sentReq, 
       receivedRequests: recvReq, 
-      blockedUsers: blocked 
-    });
+      blockedUsers: blocked,
+      source: 'db',
+      pagination: {
+        activeChats: {
+          hasMore: activeChats.length > activeOffset + activeLimit,
+          nextOffset: activeOffset + activeChatsPage.length,
+        },
+        friends: {
+          hasMore: allFriendsRaw.length > friendsOffset + friendsLimit,
+          nextOffset: friendsOffset + allFriends.length,
+          totalLoaded: friendsOffset + allFriends.length,
+          total: allFriendsRaw.length,
+        },
+        sentRequests: { hasMore: sentRaw.length > requestsLimit, total: sentRaw.length },
+        receivedRequests: { hasMore: receivedRaw.length > requestsLimit, total: receivedRaw.length },
+        blockedUsers: { hasMore: blockedRaw.length > blockedLimit, total: blockedRaw.length },
+      },
+    };
+    await setJson(responseKey, result, CACHE_TTL.USER_LISTS);
+    
+    res.set('X-Cache-Source', 'db');
+    res.json(result);
   } catch (err) {
+    console.error('Friends list error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -251,6 +510,7 @@ router.post('/toggle-autologout', async (req, res) => {
     
     user.autoLogoutEnabled = autoLogoutEnabled;
     await user.save();
+    await invalidateUser(userId);
     res.json({ message: 'Preference updated', autoLogoutEnabled: user.autoLogoutEnabled });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -265,6 +525,7 @@ router.post('/subscribe', async (req, res) => {
     
     user.pushSubscription = subscription;
     await user.save();
+    await invalidateUser(userId);
     res.status(201).json({ message: 'Push subscription saved' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -276,6 +537,7 @@ router.post('/unsubscribe', async (req, res) => {
   try {
     const { userId } = req.body;
     await User.findByIdAndUpdate(userId, { pushSubscription: null });
+    await invalidateUser(userId);
     res.json({ message: 'Unsubscribed successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -297,6 +559,7 @@ router.post('/profile-update', async (req, res) => {
     user.isProfileSetup = true;
     
     await user.save();
+    await invalidateUser(userId);
     res.json({ message: 'Profile updated successfully', user: { ...user.toObject(), password: '' } });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });

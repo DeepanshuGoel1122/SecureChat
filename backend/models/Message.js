@@ -24,4 +24,9 @@ const MessageSchema = new mongoose.Schema({
   replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null }
 }, { timestamps: true });
 
+// Query-performance indexes for chat history and unread counters
+MessageSchema.index({ sender: 1, receiver: 1, createdAt: 1 });
+MessageSchema.index({ receiver: 1, sender: 1, createdAt: 1 });
+MessageSchema.index({ receiver: 1, isRead: 1, sender: 1, createdAt: 1 });
+
 module.exports = mongoose.model('Message', MessageSchema);

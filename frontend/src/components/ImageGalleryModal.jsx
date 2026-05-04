@@ -76,9 +76,13 @@ function ImageGalleryModal({ isOpen, onClose, images, initialIndex }) {
       const filename = currentImage.split('/').pop().split('?')[0] || 'downloaded_image.jpg';
       link.setAttribute('download', filename);
       
-      document.body.appendChild(link);
-      link.click();
-      link.parentNode.removeChild(link);
+      if (document.body) {
+        document.body.appendChild(link);
+        link.click();
+        link.parentNode.removeChild(link);
+      } else {
+        console.warn('Document body not ready for download');
+      }
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Download failed:', err);
