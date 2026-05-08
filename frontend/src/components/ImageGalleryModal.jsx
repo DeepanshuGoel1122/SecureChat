@@ -202,9 +202,10 @@ function ImageGalleryModal({ isOpen, onClose, images, initialIndex }) {
   return (
     <div
       style={{
-        position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.92)',
+        position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         backdropFilter: 'blur(5px)', userSelect: 'none',
+        animation: 'fadeInFast 0.22s ease both',
       }}
       onClick={onClose}
       onWheel={handleWheel}
@@ -322,11 +323,12 @@ function ImageGalleryModal({ isOpen, onClose, images, initialIndex }) {
           style={{
             maxWidth: '90%', maxHeight: '85%', objectFit: 'contain',
             borderRadius: scale > 1 ? '0' : '8px',
-            boxShadow: scale > 1 ? 'none' : '0 0 40px rgba(0,0,0,0.8)',
+            boxShadow: scale > 1 ? 'none' : 'var(--modal-shadow)',
             transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
             transition: isDraggingRef.current ? 'none' : 'transform 0.15s ease-out',
             pointerEvents: 'none',
             willChange: 'transform',
+            animation: 'popIn 0.35s cubic-bezier(0.22,1,0.36,1) both',
           }}
         />
       </div>

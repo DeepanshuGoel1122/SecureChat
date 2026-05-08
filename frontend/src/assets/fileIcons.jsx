@@ -104,12 +104,12 @@ export const formatFileSize = (bytes) => {
 };
 
 // File icon selector utility
-export const getFileIcon = (fileName, size = 24) => {
+export const getFileIcon = (fileName, size = 24, overrideColor = null) => {
   if (!fileName || typeof fileName !== 'string') {
-    return <GenericFileIcon size={size} color="#7F8C8D" />;
+    return <GenericFileIcon size={size} color={overrideColor || "#7F8C8D"} />;
   }
   const ext = fileName.split('.').pop().toLowerCase();
-  const color = getFileTypeColor(ext);
+  const color = overrideColor || getFileTypeColor(ext);
 
   const iconProps = { size, color };
 

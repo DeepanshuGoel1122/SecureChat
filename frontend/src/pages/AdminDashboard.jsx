@@ -1158,7 +1158,7 @@ function AdminDashboard() {
       {/* Reset Modal Overlay */}
       {showModal && targetUser && (
         <div className="sidebar-overlay" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} onClick={() => setShowModal(false)}>
-          <div className="glass-panel" style={{ width: '380px', background: 'rgba(20,20,30,0.97)', border: '1px solid var(--danger)', padding: '1.5rem' }} onClick={e => e.stopPropagation()}>
+          <div className="glass-panel" style={{ width: '380px', background: 'var(--panel-bg)', border: '1px solid var(--danger)', padding: '1.5rem', boxShadow: 'var(--modal-shadow)' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 1rem 0', color: 'var(--danger)', fontSize: '1rem' }}>Override Credentials</h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
               Targeting: <strong style={{color:'white'}}>{targetUser.username}</strong>

@@ -17,6 +17,35 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
   const [nextBefore, setNextBefore] = useState(null);
   
   const observer = useRef();
+
+  const getMediaCacheKey = useCallback(() => {
+    return `media_cache_${user?.id}_${profileUser?._id}`;
+  }, [user?.id, profileUser?._id]);
+
+  const persistMediaToCache = useCallback((data) => {
+    try {
+      const key = getMediaCacheKey();
+      sessionStorage.setItem(key, JSON.stringify({
+        ...data,
+        timestamp: Date.now()
+      }));
+    } catch (e) {}
+  }, [getMediaCacheKey]);
+
+  const loadMediaFromCache = useCallback(() => {
+    try {
+      const key = getMediaCacheKey();
+      const cached = sessionStorage.getItem(key);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        // Cache media for 1 hour
+        if (parsed.timestamp && (Date.now() - parsed.timestamp) < 60 * 60 * 1000) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }, [getMediaCacheKey]);
   
   const fetchMedia = async (isLoadMore = false) => {
     if (!user || !profileUser) return;
@@ -33,12 +62,20 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setFetchedMedia(prev => ({
-          sent: isLoadMore ? [...prev.sent, ...data.sent] : data.sent,
-          received: isLoadMore ? [...prev.received, ...data.received] : data.received
-        }));
+        const updatedMedia = {
+          sent: isLoadMore ? [...fetchedMedia.sent, ...data.sent] : data.sent,
+          received: isLoadMore ? [...fetchedMedia.received, ...data.received] : data.received
+        };
+        setFetchedMedia(updatedMedia);
         setHasMoreMedia(data.hasMore);
         setNextBefore(data.nextBefore);
+        
+        // Persist to cache
+        persistMediaToCache({
+          fetchedMedia: updatedMedia,
+          hasMoreMedia: data.hasMore,
+          nextBefore: data.nextBefore
+        });
       }
     } catch (err) {
       console.error('Error fetching media:', err);
@@ -65,9 +102,18 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
       setMediaTab('sent');
       setIsProfileImageOpen(false);
       setLoadingAction(null);
-      setFetchedMedia({ sent: [], received: [] });
-      setNextBefore(null);
-      setHasMoreMedia(false);
+      
+      // Try to load from cache
+      const cached = loadMediaFromCache();
+      if (cached) {
+        setFetchedMedia(cached.fetchedMedia || { sent: [], received: [] });
+        setNextBefore(cached.nextBefore || null);
+        setHasMoreMedia(cached.hasMoreMedia || false);
+      } else {
+        setFetchedMedia({ sent: [], received: [] });
+        setNextBefore(null);
+        setHasMoreMedia(false);
+      }
     }
   }, [isOpen, profileUser?._id]);
 
@@ -119,8 +165,8 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
     );
   };
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)' }}>
-      <div className="glass-panel" style={{ width: '90%', maxWidth: '400px', height: view === 'media' ? '60vh' : 'auto', maxHeight: '85vh',  display: 'flex', flexDirection: 'column', padding: 0, borderRadius: '16px', border: '1px solid rgba(163, 113, 247, 0.3)', boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center', position: 'relative', overflow: 'hidden', transition: 'height 0.3s ease' }} onClick={e => e.stopPropagation()}>
+    <div className="profile-view-overlay" style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)' }}>
+      <div className="glass-panel profile-view-card" style={{ width: '90%', maxWidth: '400px', height: view === 'media' ? '60vh' : 'auto', maxHeight: '85vh',  display: 'flex', flexDirection: 'column', padding: 0, borderRadius: '16px', border: '1px solid var(--glass-border)', boxShadow: 'var(--modal-shadow)', textAlign: 'center', position: 'relative', overflow: 'hidden', transition: 'height 0.3s ease' }} onClick={e => e.stopPropagation()}>
         <button onClick={onClose} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '1.5rem', cursor: 'pointer', lineHeight: '1', zIndex: 10 }}>&times;</button>
         
         {view === 'profile' ? (
@@ -139,7 +185,7 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
             <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>@{profileUser.username}</div>
             
             {profileUser.bio && (
-               <p style={{ fontSize: '0.95rem', color: 'white', background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', fontStyle: 'italic', wordBreak: 'break-word' }}>
+               <p style={{ fontSize: '0.95rem', color: 'var(--text-primary)', background: 'var(--hover-color)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', fontStyle: 'italic', wordBreak: 'break-word', border: '1px solid var(--glass-border)' }}>
                  "{profileUser.bio}"
                </p>
             )}
@@ -203,7 +249,7 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
                 </>
               )}
               {sharedMedia && (
-                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--glass-border)' }}>
                   <button className="btn btn-secondary" style={{ width: '100%', padding: '0.6rem', color: 'var(--accent)', borderColor: 'rgba(88,166,255,0.3)', backgroundColor: 'rgba(88,166,255,0.05)' }} onClick={() => setView('media')}>
                     View Media
                   </button>
@@ -243,7 +289,7 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
                 <div style={{ width: '100%' }}>
                    {renderMediaSection(fetchedMedia.sent, null)}
                    {hasMoreMedia && <div ref={lastMediaElementRef} style={{ height: '20px' }}></div>}
-                   {mediaLoading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" style={{ width: '20px', height: '20px', marginRight: 0 }}></span></div>}
+                   {mediaLoading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" style={{ width: '20px', height: '20px', marginRight: 0, borderColor: 'var(--glass-border)', borderTopColor: 'var(--accent)' }}></span></div>}
                 </div>
               )}
 
@@ -251,7 +297,7 @@ function UserProfileViewModal({ isOpen, onClose, profileUser, onSendRequest, onB
                 <div style={{ width: '100%' }}>
                    {renderMediaSection(fetchedMedia.received, null)}
                    {hasMoreMedia && <div ref={lastMediaElementRef} style={{ height: '20px' }}></div>}
-                   {mediaLoading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" style={{ width: '20px', height: '20px', marginRight: 0 }}></span></div>}
+                   {mediaLoading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" style={{ width: '20px', height: '20px', marginRight: 0, borderColor: 'var(--glass-border)', borderTopColor: 'var(--accent)' }}></span></div>}
                 </div>
               )}
             </div>

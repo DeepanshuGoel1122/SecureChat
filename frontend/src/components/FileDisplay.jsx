@@ -6,8 +6,11 @@ import {
   formatFileSize
 } from '../assets/fileIcons';
 
-const FileDisplay = ({ file, message, fileIndex }) => {
+const FileDisplay = ({ file, message, fileIndex, isSender: isSenderProp }) => {
   if (!file) return null;
+  
+  // Use passed prop or derive from message (fallback)
+  const isSender = isSenderProp !== undefined ? isSenderProp : message?.isSender;
 
   // Normalize: optimistic upload objects use 'originalName' / 'size' / 'mimeType'
   // Stored file objects use 'fileName' / 'fileSize' / 'fileExtension'
@@ -35,20 +38,27 @@ const FileDisplay = ({ file, message, fileIndex }) => {
   const ext = fileExtension?.toLowerCase() || 'unknown';
   const color = getFileTypeColor(ext);
 
-  const isSender = message?.isSender; // Assuming `isSender` indicates if the message is from the sender
 
   return (
     <div
-      className={`file-display ${isSender ? 'message self file' : ''}`}
+      className="file-display"
       style={{
-        background: `linear-gradient(135deg, rgba(${hexToRgb(color).join(',')}, 0.15), rgba(${hexToRgb(color).join(',')}, 0.05))`,
-        border: `1px solid ${color}80`,
+        width: '100%',
+        background: isSender 
+          ? 'rgba(255, 255, 255, 0.95)' 
+          : `linear-gradient(135deg, rgba(${hexToRgb(color).join(',')}, 0.15), rgba(${hexToRgb(color).join(',')}, 0.05))`,
+        border: isSender 
+          ? '1px solid rgba(255, 255, 255, 0.3)' 
+          : `1px solid ${color}80`,
         borderRadius: '12px',
         padding: '12px',
-        maxWidth: '400px',
         marginTop: '8px',
         transition: 'all 0.2s ease',
-        boxShadow: `0 4px 12px rgba(0,0,0,0.1), 0 0 0 1px ${color}20`
+        boxShadow: isSender 
+          ? '0 4px 12px rgba(0,0,0,0.15)' 
+          : `0 4px 12px rgba(0,0,0,0.1), 0 0 0 1px ${color}20`,
+        color: isSender ? '#1e293b' : 'inherit',
+        boxSizing: 'border-box'
       }}
     >
       {/* File Header */}
@@ -61,14 +71,14 @@ const FileDisplay = ({ file, message, fileIndex }) => {
         }}
       >
         <div style={{ fontSize: '24px', flexShrink: 0 }}>
-          {getFileIcon(fileName, 24)}
+          {getFileIcon(fileName, 24, color)}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
               fontWeight: '600',
               fontSize: '14px',
-              color: 'inherit',
+              color: isSender ? '#1e293b' : 'inherit',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -81,8 +91,8 @@ const FileDisplay = ({ file, message, fileIndex }) => {
           <div
             style={{
               fontSize: '12px',
-              color: 'inherit',
-              opacity: 0.8,
+              color: isSender ? '#475569' : 'inherit',
+              opacity: isSender ? 1 : 0.8,
               display: 'flex',
               gap: '8px'
             }}
@@ -110,7 +120,7 @@ const FileDisplay = ({ file, message, fileIndex }) => {
               alignItems: 'center',
               gap: '6px',
               padding: '6px 12px',
-              backgroundColor: `${color}40`,
+              backgroundColor: isSender ? `${color}15` : `${color}40`,
               color: color,
               border: `1px solid ${color}80`,
               borderRadius: '6px',
@@ -119,15 +129,15 @@ const FileDisplay = ({ file, message, fileIndex }) => {
               fontWeight: '600',
               transition: 'all 0.2s ease',
               backdropFilter: 'blur(10px)',
-              boxShadow: `0 2px 4px ${color}30`
+              boxShadow: isSender ? `0 2px 4px ${color}20` : `0 2px 4px ${color}30`
             }}
             onMouseEnter={(e) => {
-              e.target.style.backgroundColor = `${color}30`;
-              e.target.style.borderColor = color;
+              e.currentTarget.style.backgroundColor = isSender ? `${color}25` : `${color}30`;
+              e.currentTarget.style.borderColor = color;
             }}
             onMouseLeave={(e) => {
-              e.target.style.backgroundColor = `${color}20`;
-              e.target.style.borderColor = `${color}40`;
+              e.currentTarget.style.backgroundColor = isSender ? `${color}15` : `${color}20`;
+              e.currentTarget.style.borderColor = `${color}40`;
             }}
           >
             <DownloadIcon size={14} color={color} />
@@ -145,6 +155,7 @@ const FileDisplay = ({ file, message, fileIndex }) => {
               fontSize: '12px',
               color: color,
               textDecoration: 'underline',
+              fontWeight: '600',
               cursor: 'pointer'
             }}
           >

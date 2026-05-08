@@ -86,7 +86,9 @@ router.post('/upload', (req, res) => {
     }
     
     console.log("Upload to Cloudinary successful. File URL:", req.file.path);
-    res.json({ imageUrl: req.file.path });
+    // Fix filename for images too
+    const decodedFileName = decodeMulterFilename(req.file.originalname);
+    res.json({ imageUrl: req.file.path, fileName: decodedFileName });
   });
 });
 
@@ -144,6 +146,28 @@ function sanitizeDownloadName(fileName) {
     .replace(/[\r\n]/g, '')
     .trim();
   return safeName || 'download';
+}
+
+/**
+ * Robustly decode filenames that may have been mangled by Multer/Busboy (Latin-1 instead of UTF-8)
+ */
+function decodeMulterFilename(name) {
+  if (!name) return name;
+  try {
+    // Multer (via busboy) defaults to Latin-1. If we see characters in the 0x80-0xFF range,
+    // it's almost certainly a mangled UTF-8 sequence.
+    const isPossiblyMangled = !/[^\x00-\xFF]/.test(name);
+    if (isPossiblyMangled) {
+      const decoded = Buffer.from(name, 'latin1').toString('utf8');
+      // If decoding changed anything and the result contains actual multi-byte characters, it's a win.
+      if (decoded !== name) {
+        return decoded;
+      }
+    }
+  } catch (e) {
+    console.error('Filename decode error:', e);
+  }
+  return name;
 }
 
 function contentDisposition(type, fileName) {
@@ -255,13 +279,15 @@ router.post('/upload-file', async (req, res) => {
         }
       }
 
+      const decodedFileName = decodeMulterFilename(req.file.originalname);
+
       // File is valid, return file info
       const fileInfo = {
         url: req.file.secure_url || req.file.path,
-        fileName: req.file.originalname,
+        fileName: decodedFileName,
         fileType: req.file.mimetype,
         fileSize: req.file.size,
-        fileExtension: req.file.originalname.split('.').pop().toLowerCase(),
+        fileExtension: decodedFileName.split('.').pop().toLowerCase(),
         publicId: req.file.public_id,
         resourceType: req.file.resource_type || 'raw'
       };

@@ -7,7 +7,7 @@ import { formatFileSize } from '../assets/fileIcons';
 import ImageGalleryModal from '../components/ImageGalleryModal';
 
 const CHAT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const CHAT_BACKGROUND_REFRESH_INTERVAL_MS = 30 * 1000;
+const CHAT_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // Increased to 5 minutes for better UX
 const chatStorage = typeof window !== 'undefined' ? window.sessionStorage : null;
 
 function ChatRoom() {
@@ -114,6 +114,15 @@ function ChatRoom() {
   const suppressNextAutoScrollRef = useRef(false);
   const pendingFlushLockRef = useRef(false);
   const pendingMessagesRef = useRef([]);
+  const userRef = useRef(user);
+  const friendIdRef = useRef(friendId);
+  const userStateRef = useRef(userState);
+
+  useEffect(() => {
+    userRef.current = user;
+    friendIdRef.current = friendId;
+    userStateRef.current = userState;
+  }, [user, friendId, userState]);
   const isSuperAdmin = user?.isSuperAdminSession === true || user?.isSuperAdminSession === 'true';
   const canShareMedia = isSuperAdmin || user?.role === 'admin' || (allowMediaSharing && canMediaSharing);
   const canUseRestrictedUpload = isSuperAdmin || (canShareMedia && (canRestrictedFileUpload !== false));
@@ -275,19 +284,23 @@ function ChatRoom() {
 
   useEffect(() => {
     const loadData = async () => {
-      if (!user?.id || !friendId) return;
+      const currentFriendId = friendIdRef.current;
+      if (!user?.id || !currentFriendId) return;
+
+      // Avoid re-loading if we're already loading or if the friendId hasn't changed
+      if (isLoadingChat) return;
 
       setIsLoadingChat(true);
       setMaxVisible(20);
       firstUnreadIdRef.current = null;
-      hasLoadedOnceRef.current = false;
+      hasLoadedOnceRef.current = true;
 
       // First, try to load from sessionStorage
-      const localCache = loadFromSessionStorage(friendId);
+      const localCache = loadFromSessionStorage(currentFriendId);
 
       if (localCache && Array.isArray(localCache.messages)) {
-        console.log(`[ChatRoom] Rendering chat immediately from sessionStorage for friend ${friendId}`);
-
+        console.log(`[ChatRoom] Rendering chat immediately from sessionStorage for friend ${currentFriendId}`);
+ 
         // Load cached data immediately
         setMessages(localCache.messages);
         setHasMoreMessages(localCache.hasMore || false);
@@ -296,25 +309,41 @@ function ChatRoom() {
         setUserState(localCache.userState || 'none');
 
         // Update in-memory cache
-        setMessagesCache(prev => new Map(prev).set(friendId, localCache));
+        setMessagesCache(prev => new Map(prev).set(currentFriendId, localCache));
+        setIsLoadingChat(false);
+        // FORCED ASYNC RELATIONSHIP SYNC:
+        // Always verify relationship to prevent messaging blocked users via stale cache
+        try {
+          const relationRes = await fetch(`${import.meta.env.VITE_API_URL}/api/users/relationship/${user.id}/${friendId}`);
+          if (relationRes.ok) {
+            const relation = await relationRes.json();
+            let currentUserState = 'none';
+            if (relation.isBlocked) currentUserState = 'blocked';
+            else if (relation.isFriend) currentUserState = 'friend';
+            else if (relation.isRecvReq) currentUserState = 'received_pending';
+            else if (relation.isSentReq) currentUserState = 'sent_pending';
+            
+            setUserState(currentUserState);
+            localCache.userState = currentUserState;
+            persistToSessionStorage(currentFriendId, localCache);
+          }
+        } catch (e) {
+          console.warn('[ChatRoom] Async relationship sync failed', e);
+        }
 
         const cacheAgeMs = Date.now() - (localCache.timestamp || 0);
         if (cacheAgeMs < CHAT_BACKGROUND_REFRESH_INTERVAL_MS) {
-          console.log(`[ChatRoom][API] Skipping background refresh for friend ${friendId}; sessionStorage is fresh (${Math.round(cacheAgeMs / 1000)}s old)`);
-          if (socket && localCache.userState === 'friend') {
-            socket.emit('mark_read', { userId: user.id, friendId });
-            socket.emit('enter_chat', { userId: user.id, friendId });
-            clearDashboardSessionCache();
-          }
-
+          console.log(`[ChatRoom][API] Skipping background refresh for friend ${currentFriendId}; sessionStorage is fresh (${Math.round(cacheAgeMs / 1000)}s old)`);
+          // enter_chat / mark_read are handled by the socket listener effect below
+          clearDashboardSessionCache();
           setIsLoadingChat(false);
           return;
         }
 
         // Now fetch latest messages in background to update cache
         try {
-          console.log(`[ChatRoom][API] Checking latest messages for friend ${friendId} after sessionStorage render`);
-          const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${friendId}?limit=20&paged=1`);
+          console.log(`[ChatRoom][API] Checking latest messages for friend ${currentFriendId} after sessionStorage render`);
+          const histRes = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/history/${user.id}/${currentFriendId}?limit=20&paged=1`);
           if (histRes.ok) {
             const histPayload = await histRes.json();
             const latestMessages = Array.isArray(histPayload) ? histPayload : (histPayload.messages || []);
@@ -323,32 +352,33 @@ function ChatRoom() {
             console.log(`[ChatRoom][API] Latest messages returned from ${source.toUpperCase()} for friend ${friendId}: ${latestMessages.length} messages`);
 
             if (latestMessages.length > 0) {
-              // Merge with cached messages, keeping newer ones
-              const existingIds = new Set(localCache.messages.map(m => m._id));
-              const newMessages = [
-                ...latestMessages.filter(m => !existingIds.has(m._id)),
-                ...localCache.messages
-              ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+              setMessages(prevMessages => {
+                // Merge with CURRENT messages (which might have been updated by sockets)
+                const existingIds = new Set(prevMessages.map(m => m._id));
+                const mergedMessages = [
+                  ...prevMessages,
+                  ...latestMessages.filter(m => !existingIds.has(m._id))
+                ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-              const newSentCount = newMessages.filter(m => m.sender._id === user.id).length;
+                const newSentCount = mergedMessages.filter(m => m.sender._id === user.id).length;
+                setSentCount(newSentCount);
 
-              setMessages(newMessages);
-              setHasMoreMessages(hasMore);
-              setSentCount(newSentCount);
+                // Update cache and persist with the FULL merged set
+                const updatedCache = {
+                  messages: mergedMessages,
+                  hasMore,
+                  sentCount: newSentCount,
+                  friendDetails: localCache.friendDetails,
+                  userState: localCache.userState
+                };
 
-              // Update cache and persist
-              const updatedCache = {
-                messages: newMessages,
-                hasMore,
-                sentCount: newSentCount,
-                friendDetails: localCache.friendDetails,
-                userState: localCache.userState
-              };
+                setMessagesCache(prevCache => new Map(prevCache).set(friendId, updatedCache));
+                persistToSessionStorage(friendId, updatedCache);
 
-              setMessagesCache(prev => new Map(prev).set(friendId, updatedCache));
-              persistToSessionStorage(friendId, updatedCache);
+                return mergedMessages;
+              });
             } else {
-              console.log(`[ChatRoom][API] No newer messages found for friend ${friendId}; keeping sessionStorage data`);
+              console.log(`[ChatRoom][API] No newer messages found for friend ${friendId}; keeping current state`);
             }
           }
         } catch (err) {
@@ -429,12 +459,12 @@ function ChatRoom() {
           userState: currentUserState
         };
 
-        setMessagesCache(prev => new Map(prev).set(friendId, cacheData));
-        persistToSessionStorage(friendId, cacheData);
+        setMessagesCache(prev => new Map(prev).set(currentFriendId, cacheData));
+        persistToSessionStorage(currentFriendId, cacheData);
 
         if (socket && currentUserState === 'friend') {
-          socket.emit('mark_read', { userId: user.id, friendId });
-          socket.emit('enter_chat', { userId: user.id, friendId });
+          socket.emit('mark_read', { userId: user.id, friendId: currentFriendId });
+          socket.emit('enter_chat', { userId: user.id, friendId: currentFriendId });
           clearDashboardSessionCache();
         }
       } catch (err) {
@@ -470,11 +500,10 @@ function ChatRoom() {
     }
 
     return () => {
-      if (socket && user?.id && friendId) {
-        socket.emit('leave_chat', { userId: user.id, friendId });
-      }
+      // NOTE: leave_chat is handled in the socket listener effect cleanup
     };
-  }, [user, friendId, socket, clearDashboardSessionCache]);
+  }, [user?.id, friendId]); // Removed `socket` — adding socket as dep causes loadData to re-run on reconnect
+                              // which overwrites socket-delivered messages with stale cache.
 
   // Cleanup expired chat cache entries from sessionStorage
   useEffect(() => {
@@ -571,6 +600,8 @@ function ChatRoom() {
       });
       if (res.ok) {
         setUserState('blocked');
+        try { sessionStorage.removeItem(`chat_cache_${blockConfirm}`); } catch(e){}
+        clearDashboardSessionCache();
       } else {
         const data = await res.json();
         alert(data.message || 'Failed to block user');
@@ -593,6 +624,8 @@ function ChatRoom() {
       });
       if (res.ok) {
         setUserState('friend');
+        try { sessionStorage.removeItem(`chat_cache_${targetId}`); } catch(e){}
+        clearDashboardSessionCache();
         if (socket) socket.emit('user_unblocked', { userId: user.id, unblockedId: targetId });
       } else {
         const data = await res.json();
@@ -620,6 +653,8 @@ function ChatRoom() {
       });
       if (res.ok) {
         setUserState('none');
+        try { sessionStorage.removeItem(`chat_cache_${removeConfirm}`); } catch(e){}
+        clearDashboardSessionCache();
       } else {
         const data = await res.json();
         alert(data.message || 'Failed to remove friend');
@@ -636,15 +671,40 @@ function ChatRoom() {
   useEffect(() => {
     if (!socket || !user?.id) return;
 
+    // Emit enter_chat and mark_read whenever the socket (re)connects or friendId changes.
+    // This replaces the socket emit that was previously inside loadData, preventing
+    // loadData from needing `socket` as a dependency (which caused double-runs that
+    // overwrote socket-delivered messages with stale sessionStorage cache).
+    const currentFriendIdOnMount = friendIdRef.current;
+    const currentUserStateOnMount = userStateRef.current;
+    if (currentFriendIdOnMount && currentUserStateOnMount === 'friend') {
+      socket.emit('mark_read', { userId: user.id, friendId: currentFriendIdOnMount });
+      socket.emit('enter_chat', { userId: user.id, friendId: currentFriendIdOnMount });
+    } else if (currentFriendIdOnMount) {
+      // Even if not friends yet, still register active chat so server knows where we are
+      socket.emit('enter_chat', { userId: user.id, friendId: currentFriendIdOnMount });
+    }
+
     const handleReceive = (data) => {
+      if (!data) return;
+      const currentFriendId = friendIdRef.current;
+      const currentUserId = userRef.current?.id;
+      if (!currentFriendId || !currentUserId) return;
+
+      const dataSenderId = data.sender?._id || data.sender;
+      const dataReceiverId = data.receiver?._id || data.receiver;
+
       if (
-        (data.sender._id === user.id && data.receiver._id === friendId) || 
-        (data.sender._id === friendId && data.receiver._id === user.id)
+        (dataSenderId === currentUserId && dataReceiverId === currentFriendId) || 
+        (dataSenderId === currentFriendId && dataReceiverId === currentUserId)
       ) {
         clearDashboardSessionCache();
         // First, remove any matching pending messages BEFORE adding the real message
         let pendingClientId = null;
-        if (data.sender._id === user.id && data.receiver._id === friendId) {
+        const normalizedDataSenderId = String(dataSenderId);
+        const normalizedDataReceiverId = String(dataReceiverId);
+
+        if (normalizedDataSenderId === String(currentUserId) && normalizedDataReceiverId === String(currentFriendId)) {
           // This is our message coming back from server, try to find and remove the pending version
           setPendingMessages((prev) => {
             const matchIndex = prev.findIndex((p) => {
@@ -664,32 +724,39 @@ function ChatRoom() {
           });
         }
 
-        // Now add the real message, but check if it's already in messages (avoid duplicates)
+        // Now add the real message
         setMessages((prev) => {
-          // Check if message with this ID already exists
-          if (prev.some(m => m._id === data._id)) {
-            return prev; // Don't add duplicate
-          }
-          const newMessages = [...prev, data];
-          const newSentCount = newMessages.filter(m => m.sender._id === user.id).length;
-          setSentCount(newSentCount);
+          const messageId = String(data._id);
           
-          // Update cache with new message
+          // Use filter to remove any potential duplicate with the same ID, then append
+          // This is safer than a 'some' check which returns early.
+          const filtered = prev.filter(m => String(m._id) !== messageId);
+          const newMessages = [...filtered, data];
+          
+          // Update cache immediately
+          const currentSentCount = newMessages.filter(m => {
+            const mSenderId = m.sender?._id || m.sender;
+            return String(mSenderId) === String(currentUserId);
+          }).length;
+          setSentCount(currentSentCount);
+
           setMessagesCache(prevCache => {
-            const current = prevCache.get(friendId);
-            if (current) {
-              const updated = { ...current, messages: newMessages, sentCount: newSentCount };
-              persistToSessionStorage(friendId, updated);
-              return new Map(prevCache).set(friendId, updated);
-            }
-            return prevCache;
+            const current = prevCache.get(currentFriendId);
+            const updated = { 
+              ...(current || {}), 
+              messages: newMessages, 
+              sentCount: currentSentCount,
+              timestamp: Date.now() 
+            };
+            persistToSessionStorage(currentFriendId, updated);
+            return new Map(prevCache).set(currentFriendId, updated);
           });
           
           return newMessages;
         });
         
-        if (data.sender._id === friendId && userState === 'friend') {
-           socket.emit('mark_read', { userId: user.id, friendId });
+        if (dataSenderId === currentFriendId && userStateRef.current === 'friend') {
+           socket.emit('mark_read', { userId: currentUserId, friendId: currentFriendId });
            clearDashboardSessionCache();
         }
         
@@ -705,20 +772,27 @@ function ChatRoom() {
     };
 
     const handleEditReceive = (data) => {
+      const currentFriendId = friendIdRef.current;
+      const currentUserId = userRef.current?.id;
+      if (!currentFriendId || !currentUserId) return;
+
+      const dataSenderId = data.sender?._id || data.sender;
+      const dataReceiverId = data.receiver?._id || data.receiver;
+
       if (
-        (data.sender._id === user.id && data.receiver._id === friendId) || 
-        (data.sender._id === friendId && data.receiver._id === user.id)
+        (dataSenderId === currentUserId && dataReceiverId === currentFriendId) || 
+        (dataSenderId === currentFriendId && dataReceiverId === currentUserId)
       ) {
         clearDashboardSessionCache();
         setMessages((prev) => {
           const updated = prev.map(m => m._id === data._id ? data : m);
           // Update cache
           setMessagesCache(prevCache => {
-            const current = prevCache.get(friendId);
+            const current = prevCache.get(currentFriendId);
             if (current) {
               const cacheUpdated = { ...current, messages: updated };
-              persistToSessionStorage(friendId, cacheUpdated);
-              return new Map(prevCache).set(friendId, cacheUpdated);
+              persistToSessionStorage(currentFriendId, cacheUpdated);
+              return new Map(prevCache).set(currentFriendId, cacheUpdated);
             }
             return prevCache;
           });
@@ -729,20 +803,22 @@ function ChatRoom() {
 
     const handleError = (msg) => {
       alert(`Server Notice: ${msg}`);
+      setPendingMessages([]); // Clear stuck messages on error
     };
 
     const handleMessagesRead = ({ byUserId }) => {
-      if (byUserId === friendId) {
+      const currentFriendId = friendIdRef.current;
+      if (byUserId === currentFriendId) {
         clearDashboardSessionCache();
         setMessages((prev) => {
-          const updated = prev.map(m => m.receiver._id === friendId ? { ...m, isRead: true } : m);
+          const updated = prev.map(m => (m.receiver?._id || m.receiver) === currentFriendId ? { ...m, isRead: true } : m);
           // Update cache
           setMessagesCache(prevCache => {
-            const current = prevCache.get(friendId);
+            const current = prevCache.get(currentFriendId);
             if (current) {
               const cacheUpdated = { ...current, messages: updated };
-              persistToSessionStorage(friendId, cacheUpdated);
-              return new Map(prevCache).set(friendId, cacheUpdated);
+              persistToSessionStorage(currentFriendId, cacheUpdated);
+              return new Map(prevCache).set(currentFriendId, cacheUpdated);
             }
             return prevCache;
           });
@@ -752,7 +828,7 @@ function ChatRoom() {
     };
 
     const handleUnblockedYou = (unblockerId) => {
-      if (unblockerId === friendId) {
+      if (unblockerId === friendIdRef.current) {
         setUserState('friend');
       }
     };
@@ -772,11 +848,11 @@ function ChatRoom() {
         
         // Update cache
         setMessagesCache(prevCache => {
-          const current = prevCache.get(friendId);
+          const current = prevCache.get(friendIdRef.current);
           if (current) {
             const cacheUpdated = { ...current, messages: filtered, sentCount: newSentCount };
-            persistToSessionStorage(friendId, cacheUpdated);
-            return new Map(prevCache).set(friendId, cacheUpdated);
+            persistToSessionStorage(friendIdRef.current, cacheUpdated);
+            return new Map(prevCache).set(friendIdRef.current, cacheUpdated);
           }
           return prevCache;
         });
@@ -793,8 +869,12 @@ function ChatRoom() {
       socket.off('chat_error', handleError);
       socket.off('message_deleted', handleDeleteReceive);
       socket.off('friend_unblocked_you', handleUnblockedYou);
+      // Emit leave_chat on cleanup (when socket changes, friendId changes, or component unmounts)
+      if (friendIdRef.current && user?.id) {
+        socket.emit('leave_chat', { userId: user.id, friendId: friendIdRef.current });
+      }
     };
-  }, [socket, user, friendId, userState, clearDashboardSessionCache]);
+  }, [socket, friendId, user?.id, clearDashboardSessionCache]);
 
   useEffect(() => {
     if (isLoadingChat) return;
@@ -1619,7 +1699,11 @@ function ChatRoom() {
       }
     }
     
-    return deduplicated.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    return deduplicated.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateA - dateB;
+    });
   }, [messages, pendingMessages]);
 
   return (
@@ -1668,14 +1752,15 @@ function ChatRoom() {
       {blockConfirm && (
         <div
           onClick={() => setBlockConfirm(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+              boxShadow: 'var(--modal-shadow)', textAlign: 'center',
+              animation: 'popIn 0.32s cubic-bezier(0.22,1,0.36,1) both'
             }}
           >
             <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🚫</div>
@@ -1722,14 +1807,15 @@ function ChatRoom() {
       {removeConfirm && (
         <div
           onClick={() => setRemoveConfirm(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+              boxShadow: 'var(--modal-shadow)', textAlign: 'center',
+              animation: 'popIn 0.32s cubic-bezier(0.22,1,0.36,1) both'
             }}
           >
             <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>❌</div>
@@ -1776,14 +1862,15 @@ function ChatRoom() {
       {deleteConfirmMsg && (
         <div 
           onClick={() => setDeleteConfirmMsg(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
         >
           <div 
             onClick={(e) => e.stopPropagation()}
             style={{ 
               background: 'var(--panel-bg)', border: '1px solid var(--danger)', 
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px', 
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center' 
+              boxShadow: 'var(--modal-shadow)', textAlign: 'center',
+              animation: 'popIn 0.32s cubic-bezier(0.22,1,0.36,1) both'
             }}
           >
             <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🗑️</div>
@@ -1917,7 +2004,7 @@ function ChatRoom() {
                 <div 
                   id={`msg-${msg._id}`}
                   className={`message ${isSelf ? 'self' : 'other'}`}
-                  style={{ position: 'relative', paddingBottom: '0.4rem', maxWidth: '82%', minWidth: '110px', opacity: (userState === 'friend' || userState.includes('pending')) ? 1 : 0.8 }}
+                  style={{ position: 'relative', paddingBottom: '0.4rem', maxWidth: '82%', minWidth: '110px', opacity: (userState === 'friend' || userState.includes('pending')) ? 1 : 0.8, zIndex: showMenu ? 50 : 1 }}
                   onTouchStart={handleTouchStart}
                   onTouchMove={handleTouchMove}
                   onTouchEnd={(e) => handleTouchEnd(e, msg)}
@@ -1942,18 +2029,18 @@ function ChatRoom() {
                     borderRadius: '8px', zIndex: 20, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
                     width: 'max-content', minWidth: '100px', backdropFilter: 'blur(10px)'
                   }}>
-                    <button onClick={() => handleCopy(msg.text)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Copy</button>
+                    <button className="msg-action-btn" onClick={() => handleCopy(msg.text)} style={{ borderBottom: '1px solid var(--glass-border)' }}>Copy</button>
                     {((msg.imageUrls?.length || 0) + (msg.imageUrl ? 1 : 0) > 1) && (
-                      <button onClick={() => handleDownloadAll(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderBottom: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Download All</button>
+                      <button className="msg-action-btn" onClick={() => handleDownloadAll(msg)} style={{ borderBottom: '1px solid var(--glass-border)' }}>Download All</button>
                     )}
                     {(userState === 'friend' || userState.includes('pending') || isSuperAdmin || user?.role === 'admin') && (
                       <>
-                        <button onClick={() => handleReply(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Reply</button>
+                        <button className="msg-action-btn" onClick={() => handleReply(msg)}>Reply</button>
                         {isSelf && (
-                          <button onClick={() => handleEdit(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Edit</button>
+                          <button className="msg-action-btn" onClick={() => handleEdit(msg)} style={{ borderTop: '1px solid var(--glass-border)' }}>Edit</button>
                         )}
                         {canUseDelete && (isSelf || user?.role === 'admin' || isSuperAdmin) && (
-                          <button onClick={() => handleDelete(msg)} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', padding: '0.65rem 1rem', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid var(--glass-border)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Delete</button>
+                          <button className="msg-action-btn danger" onClick={() => handleDelete(msg)} style={{ borderTop: '1px solid var(--glass-border)' }}>Delete</button>
                         )}
                       </>
                     )}
@@ -2014,8 +2101,8 @@ function ChatRoom() {
 
                 {(msg.files?.length > 0 || msg.file) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '0.5rem', position: 'relative' }}>
-                    {msg.file && <FileDisplay file={msg.file} message={msg} fileIndex={null} />}
-                    {msg.files && msg.files.map((f, i) => <FileDisplay key={i} file={f} message={msg} fileIndex={i} />)}
+                    {msg.file && <FileDisplay file={msg.file} message={msg} fileIndex={null} isSender={isSelf} />}
+                    {msg.files && msg.files.map((f, i) => <FileDisplay key={i} file={f} message={msg} fileIndex={i} isSender={isSelf} />)}
                     
                     {(msg.isUploading || msg.uploadError) && (
                       <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: msg.uploadError ? 'rgba(255,0,0,0.15)' : 'rgba(0,0,0,0.45)', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem', border: msg.uploadError ? '1px solid rgba(255,0,0,0.4)' : 'none' }}>

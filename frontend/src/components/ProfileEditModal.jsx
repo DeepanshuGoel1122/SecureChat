@@ -2,6 +2,22 @@ import React, { useState, useRef, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import ImageGalleryModal from './ImageGalleryModal';
 
+// Small inline confirmation dialog
+const CompactConfirm = ({ isOpen, title, onConfirm, onCancel, confirmText = "Yes", cancelText = "No" }) => {
+  if (!isOpen) return null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'var(--modal-backdrop)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
+      <div className="glass-panel" style={{ width: '280px', padding: '1.25rem', borderRadius: '12px', textAlign: 'center', boxShadow: 'var(--modal-shadow)' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 1rem 0', color: 'var(--text-primary)', fontSize: '1rem', fontWeight: '600' }}>{title}</h3>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button type="button" className="btn btn-secondary" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} onClick={onCancel}>{cancelText}</button>
+          <button type="button" className="btn" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem', background: 'var(--danger)' }} onClick={onConfirm}>{confirmText}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
   const { user, updateUser } = useContext(AuthContext);
   const [firstName, setFirstName] = useState(user?.firstName || '');
@@ -11,6 +27,7 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
   const [isProfileImageOpen, setIsProfileImageOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRemoveConfirmOpen, setIsRemoveConfirmOpen] = useState(false);
   
   const fileInputRef = useRef(null);
 
@@ -76,8 +93,8 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)' }} onClick={!isFirstSetup ? onClose : undefined}>
-      <div className="glass-panel" style={{ width: '90%', maxWidth: '450px', padding: '2rem', borderRadius: '16px', border: '1px solid rgba(88, 166, 255, 0.3)', boxShadow: '0 12px 40px rgba(0,0,0,0.6)', overflowY: 'auto', maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)', animation: 'fadeInFast 0.22s ease both' }} onClick={!isFirstSetup ? onClose : undefined}>
+      <div className="glass-panel" style={{ width: '90%', maxWidth: '450px', padding: '2rem', borderRadius: '16px', border: '1px solid var(--glass-border)', boxShadow: 'var(--modal-shadow)', overflowY: 'auto', maxHeight: '90vh', animation: 'popIn 0.35s cubic-bezier(0.22,1,0.36,1) both' }} onClick={e => e.stopPropagation()}>
         <h2 style={{ margin: '0 0 1.5rem 0', color: 'var(--text-primary)', textAlign: 'center', fontSize: '1.5rem' }}>
           {isFirstSetup ? 'Complete Your Profile' : 'Edit Profile'}
         </h2>
@@ -103,9 +120,16 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
             </div>
             
             <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageChange} style={{ display: 'none' }} />
-            <button type="button" className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
-              Change Picture
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
+                {profilePic ? 'Change Picture' : 'Add Picture'}
+              </button>
+              {profilePic && (
+                <button type="button" className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.85rem', color: 'var(--danger)', borderColor: 'rgba(244, 63, 94, 0.4)' }} onClick={() => setIsRemoveConfirmOpen(true)} disabled={isUploading}>
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
           
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -143,6 +167,16 @@ function ProfileEditModal({ isOpen, onClose, isFirstSetup = false }) {
         onClose={() => setIsProfileImageOpen(false)}
         images={profilePic ? [profilePic] : []}
         initialIndex={0}
+      />
+      <CompactConfirm 
+        isOpen={isRemoveConfirmOpen}
+        title="Remove Profile Picture?"
+        onConfirm={() => {
+          setProfilePic('');
+          setIsRemoveConfirmOpen(false);
+        }}
+        onCancel={() => setIsRemoveConfirmOpen(false)}
+        confirmText="Remove"
       />
     </div>
   );

@@ -340,7 +340,7 @@ export const AuthProvider = ({ children }) => {
             display: 'flex', 
             justifyContent: 'center', 
             alignItems: 'center', 
-            background: 'rgba(0,0,0,0.85)',
+            background: 'var(--modal-backdrop)',
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             padding: '1.5rem'
@@ -353,7 +353,7 @@ export const AuthProvider = ({ children }) => {
               maxWidth: '400px', 
               textAlign: 'center',
               border: '1px solid rgba(248, 81, 73, 0.3)',
-              boxShadow: '0 0 40px rgba(248, 81, 73, 0.15)',
+              boxShadow: 'var(--modal-shadow)',
               animation: 'fadeIn 0.4s ease-out'
             }}
           >
@@ -410,7 +410,7 @@ export const AuthProvider = ({ children }) => {
             display: 'flex', 
             justifyContent: 'center', 
             alignItems: 'center', 
-            background: 'rgba(0,0,0,0.85)',
+            background: 'var(--modal-backdrop)',
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             padding: '1.5rem'
@@ -423,7 +423,7 @@ export const AuthProvider = ({ children }) => {
               maxWidth: '400px', 
               textAlign: 'center',
               border: '1px solid rgba(88, 166, 255, 0.3)',
-              boxShadow: '0 0 40px rgba(88, 166, 255, 0.1)',
+              boxShadow: 'var(--modal-shadow)',
               animation: 'fadeIn 0.4s ease-out'
             }}
           >

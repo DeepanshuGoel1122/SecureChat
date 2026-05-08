@@ -4,6 +4,7 @@ import { AuthContext } from '../context/AuthContext';
 import ProfileEditModal from '../components/ProfileEditModal';
 import UserProfileViewModal from '../components/UserProfileViewModal';
 import ThemeToggle from '../components/ThemeToggle';
+import IconToggle from '../components/IconToggle';
 
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const dashboardStorage = typeof window !== 'undefined' ? window.sessionStorage : null;
@@ -84,6 +85,16 @@ function Dashboard() {
   const toggleSection = (section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
+
+  const getUserRelation = React.useCallback((targetUser) => {
+    if (!targetUser?._id) return 'none';
+    const tid = String(targetUser._id);
+    if (blockedUsers.some(b => String(b._id) === tid)) return 'blocked';
+    if (friends.some(f => String(f._id) === tid)) return 'friend';
+    if (sentRequests.some(s => String(s._id) === tid)) return 'sent';
+    if (receivedRequests.some(r => String(r._id) === tid)) return 'received';
+    return 'none';
+  }, [friends, sentRequests, receivedRequests, blockedUsers]);
   
   const profileMenuRef = useRef(null);
   
@@ -632,45 +643,29 @@ function Dashboard() {
             {isProfileMenuOpen && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '220px', background: 'var(--panel-bg)', border: '1px solid var(--glass-border)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)' }}
+                style={{ position: 'absolute', top: '100%', right: '0', marginTop: '0.4rem', width: '220px', background: 'var(--header-bg)', border: '1px solid var(--glass-border)', borderRadius: '10px', padding: '0.3rem', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.8)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', animation: 'dropdownOpen 0.22s cubic-bezier(0.22,1,0.36,1) both', transformOrigin: 'top right' }}
               >
                 {!isChangePasswordOpen ? (
                   <>
                     <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Auto-logout (3hrs)</span>
-                      <div 
-                        onClick={handleToggleAutoLogout}
-                        style={{ 
-                          width: '34px', height: '18px', 
-                          background: user.autoLogoutEnabled !== false ? 'var(--success)' : '#333', 
-                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s' 
-                        }}
-                      >
-                        <div style={{ 
-                          width: '14px', height: '14px', background: 'white', borderRadius: '50%', 
-                          position: 'absolute', top: '2px', 
-                          left: user.autoLogoutEnabled !== false ? '18px' : '2px', 
-                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)' 
-                        }} />
-                      </div>
+                      <IconToggle 
+                        isEnabled={user.autoLogoutEnabled !== false} 
+                        onToggle={handleToggleAutoLogout}
+                        onIcon="⏲️"
+                        offIcon="⚪"
+                        onColor="var(--accent)"
+                      />
                     </div>
                     <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Push Notifications</span>
-                      <div
-                        onClick={handleTogglePushNotifications}
-                        style={{
-                          width: '34px', height: '18px',
-                          background: pushEnabled ? 'var(--success)' : '#333',
-                          borderRadius: '10px', position: 'relative', cursor: 'pointer', transition: 'background 0.2s'
-                        }}
-                      >
-                        <div style={{
-                          width: '14px', height: '14px', background: 'white', borderRadius: '50%',
-                          position: 'absolute', top: '2px',
-                          left: pushEnabled ? '18px' : '2px',
-                          transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
-                        }} />
-                      </div>
+                      <IconToggle 
+                        isEnabled={pushEnabled} 
+                        onToggle={handleTogglePushNotifications}
+                        onIcon="🔔"
+                        offIcon="🔕"
+                        onColor="var(--accent)"
+                      />
                     </div>
                     <div style={{ padding: '0.6rem 0.7rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: '500' }}>Theme Mode</span>
@@ -782,7 +777,7 @@ function Dashboard() {
                 <div key={f._id} className="chat-list-item" style={{ padding: '0.75rem 1rem', borderRadius: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => navigate(`/chat/${f._id}`)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ position: 'relative' }}>
-                      <div style={{ width: '40px', height: '40px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
+                      <div style={{ width: '40px', height: '40px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: getUserRelation(f) }); }}>
                         {f.profilePic ? <img src={f.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (f.firstName ? f.firstName.charAt(0).toUpperCase() : f.username.charAt(0).toUpperCase())}
                       </div>
                       <div style={{ position: 'absolute', bottom: 0, right: 0, width: '12px', height: '12px', borderRadius: '50%', background: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? 'var(--success)' : 'var(--text-secondary)', boxShadow: onlineUsers.some(ou => (ou.userId || ou) === f._id) ? '0 0 5px var(--success)' : 'none', border: '2px solid rgba(13,17,23,0.95)' }}></div>
@@ -849,10 +844,7 @@ function Dashboard() {
                 )}
                 {!isSearching && hasSearched && searchResults.length === 0 && <div style={{ padding: '0.75rem', color: 'var(--danger)', textAlign: 'center', background: 'rgba(255,0,0,0.1)', borderRadius: '8px', fontSize: '0.9rem' }}>User not found.</div>}
                 {!isSearching && searchResults.map(u => {
-                  let relation = 'none';
-                  if (friends.some(f => f._id === u._id)) relation = 'friend';
-                  else if (sentRequests.some(f => f._id === u._id)) relation = 'sent';
-                  else if (receivedRequests.some(f => f._id === u._id)) relation = 'received';
+                  const relation = getUserRelation(u);
                   
                   return (
                   <div key={u._id} className="chat-list-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', borderRadius: '8px', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: u, relation })}>
@@ -906,7 +898,7 @@ function Dashboard() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {receivedRequests.map(r => (
                             <div key={r._id} className="chat-list-item" style={{ display: 'flex', flexDirection: 'column', padding: '0.75rem', borderRadius: '8px' }}>
-                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: r, relation: 'received' })}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: r, relation: getUserRelation(r) })}>
                                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem', flexShrink: 0 }}>
                                    {r.profilePic ? <img src={r.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (r.firstName ? r.firstName.charAt(0).toUpperCase() : r.username.charAt(0).toUpperCase())}
                                  </div>
@@ -958,7 +950,7 @@ function Dashboard() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {friends.map(f => (
                             <div key={f._id} className="chat-list-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', borderRadius: '8px', cursor: 'pointer' }} onClick={() => navigate(`/chat/${f._id}`)}>
-                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: 'friend' }); }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setViewedProfile({ user: f, relation: getUserRelation(f) }); }}>
                                   <div style={{ position: 'relative' }}>
                                     <div style={{ width: '32px', height: '32px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.8rem' }}>
                                       {f.profilePic ? <img src={f.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (f.firstName ? f.firstName.charAt(0).toUpperCase() : f.username.charAt(0).toUpperCase())}
@@ -1008,7 +1000,7 @@ function Dashboard() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {sentRequests.map(s => (
                             <div key={s._id} className="chat-list-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', borderRadius: '8px' }}>
-                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: s, relation: 'sent' })}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: s, relation: getUserRelation(s) })}>
                                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
                                    {s.profilePic ? <img src={s.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (s.firstName ? s.firstName.charAt(0).toUpperCase() : s.username.charAt(0).toUpperCase())}
                                  </div>
@@ -1050,7 +1042,7 @@ function Dashboard() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {blockedUsers.map(b => (
-                            <div key={b._id} className="chat-list-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255,0,0,0.1)' }}>
+                            <div key={b._id} className="chat-list-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255,0,0,0.1)', cursor: 'pointer' }} onClick={() => setViewedProfile({ user: b, relation: 'blocked' })}>
                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', background: 'linear-gradient(135deg, #a371f7, #58a6ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '0.7rem' }}>
                                    {b.profilePic ? <img src={b.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : (b.firstName ? b.firstName.charAt(0).toUpperCase() : b.username.charAt(0).toUpperCase())}
@@ -1078,14 +1070,15 @@ function Dashboard() {
       {blockConfirm && (
         <div
           onClick={() => setBlockConfirm(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+              boxShadow: 'var(--modal-shadow)', textAlign: 'center',
+              animation: 'popIn 0.32s cubic-bezier(0.22,1,0.36,1) both'
             }}
           >
             <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🚫</div>
@@ -1113,12 +1106,12 @@ function Dashboard() {
               <button
                 onClick={() => setBlockConfirm(null)}
                 style={{
-                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  width: '100%', padding: '0.7rem', border: '1px solid var(--glass-border)',
                   borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
                   fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
                   transition: 'background 0.2s ease'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--hover-color)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 Cancel
@@ -1132,14 +1125,15 @@ function Dashboard() {
       {removeConfirm && (
         <div
           onClick={() => setRemoveConfirm(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'rgba(33, 38, 45, 0.98)', border: '1px solid rgba(248, 81, 73, 0.3)',
+              background: 'var(--panel-bg)', border: '1px solid var(--danger)',
               borderRadius: '12px', padding: '1.5rem', width: '90%', maxWidth: '340px',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.6)', textAlign: 'center'
+              boxShadow: 'var(--modal-shadow)', textAlign: 'center',
+              animation: 'popIn 0.32s cubic-bezier(0.22,1,0.36,1) both'
             }}
           >
             <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>❌</div>
@@ -1167,12 +1161,12 @@ function Dashboard() {
               <button
                 onClick={() => setRemoveConfirm(null)}
                 style={{
-                  width: '100%', padding: '0.7rem', border: '1px solid rgba(255,255,255,0.15)',
+                  width: '100%', padding: '0.7rem', border: '1px solid var(--glass-border)',
                   borderRadius: '8px', background: 'transparent', color: 'var(--text-primary)',
                   fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer',
                   transition: 'background 0.2s ease'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--hover-color)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 Cancel
@@ -1185,12 +1179,12 @@ function Dashboard() {
       {/* Delete Account Modal */}
       {deleteModal.open && (
         <div 
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}
+          style={{ position: 'fixed', inset: 0, background: 'var(--modal-backdrop)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)', animation: 'fadeInFast 0.2s ease both' }}
           onClick={() => !deleteModal.loading && setDeleteModal(prev => ({ ...prev, open: false }))}
         >
           <div 
             onClick={e => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: '420px', margin: '1rem', background: 'var(--panel-bg)', border: '1px solid var(--danger)', borderRadius: '16px', padding: '2rem', boxShadow: '0 20px 60px rgba(0,0,0,0.8)' }}
+            style={{ width: '100%', maxWidth: '420px', margin: '1rem', background: 'var(--panel-bg)', border: '1px solid var(--danger)', borderRadius: '16px', padding: '2rem', boxShadow: 'var(--modal-shadow)', animation: 'popIn 0.3s cubic-bezier(0.22,1,0.36,1) both' }}
           >
             <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
               <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>⚠️</div>

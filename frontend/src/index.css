@@ -15,6 +15,8 @@
   --message-self-bg: linear-gradient(135deg, #6366f1, #8b5cf6);
   --message-other-bg: rgba(30, 41, 59, 0.8);
   --file-msg-bg: linear-gradient(135deg, #3b82f6, #2dd4bf);
+  --modal-backdrop: rgba(0, 0, 0, 0.7);
+  --modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 }
 
 [data-theme='light'] {
@@ -34,6 +36,8 @@
   --message-self-bg: linear-gradient(135deg, #4f46e5, #7c3aed);
   --message-other-bg: #ffffff;
   --file-msg-bg: linear-gradient(135deg, #2563eb, #0d9488);
+  --modal-backdrop: rgba(0, 0, 0, 0.45);
+  --modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
 }
 
 * {
@@ -128,7 +132,7 @@ body {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   letter-spacing: 0.01em;
   white-space: nowrap;
   flex-shrink: 0;
@@ -385,7 +389,7 @@ body {
   align-self: center;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   text-align: center;
 }
 
@@ -409,14 +413,89 @@ body {
   min-width: 0;
 }
 
+/* ============================================================
+   ANIMATION KEYFRAMES — full system
+   ============================================================ */
+
+/* Page / container enter */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fadeInFast {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Chat room slides in — must carry the -50% centering offset so it never breaks layout */
+@keyframes slideInFromRight {
+  from { opacity: 0; transform: translateX(calc(-50% + 40px)); }
+  to   { opacity: 1; transform: translateX(-50%); }
+}
+
+/* Dashboard slides back in from the left */
+@keyframes slideInFromLeft {
+  from { opacity: 0; transform: translateX(-40px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Message bubble — self (right side) */
 @keyframes slideIn {
-  from { opacity: 0; transform: translateX(10px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translateX(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Message bubble — other (left side) */
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-14px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Modal / profile card pop */
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.88) translateY(16px); }
+  70%  { transform: scale(1.02) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Sidebar slides from right */
+@keyframes slideInLeft {
+  from { transform: translateX(100%); opacity: 0.5; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* Dropdown menu */
+@keyframes dropdownOpen {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+/* Accordion expand */
+@keyframes accordionOpen {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Subtle float for online indicator */
+@keyframes floatPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  50%       { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+}
+
+/* Shake for errors */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-6px); }
+  40%       { transform: translateX(6px); }
+  60%       { transform: translateX(-4px); }
+  80%       { transform: translateX(4px); }
+}
+
+/* Stagger helper — children animate in sequence */
+@keyframes staggerIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* Image message specific styles */
@@ -440,7 +519,7 @@ body {
 .sidebar-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.6);
+  background: var(--modal-backdrop);
   z-index: 100;
   display: flex;
   justify-content: flex-end;
@@ -453,7 +532,7 @@ body {
   height: 100%;
   background: var(--bg-color);
   border-left: 1px solid var(--glass-border);
-  box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+  box-shadow: var(--modal-shadow);
   animation: slideInLeft 0.3s ease;
   display: flex;
   flex-direction: column;
@@ -502,7 +581,7 @@ body {
   .message {
     max-width: 88%;
     padding: 0.45rem 0.65rem;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
   }
 
   .admin-container {
@@ -673,7 +752,7 @@ body {
 }
 
 .notification-body {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -762,4 +841,238 @@ body {
 
 .chat-list-item:hover {
   background-color: var(--accent-hover);
+}
+
+.msg-action-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.msg-action-btn:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+.msg-action-btn.danger {
+  color: var(--danger);
+}
+.msg-action-btn.danger:hover {
+  background: rgba(244, 63, 94, 0.1);
+}
+
+
+/* ============================================================
+   ANIMATION APPLICATIONS
+   ============================================================ */
+
+/* ----- Page-level enter animations ----- */
+.auth-box {
+  animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dashboard-container {
+  animation: slideInFromLeft 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.chat-container {
+  animation: slideInFromRight 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.admin-container {
+  animation: fadeIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Chat room header slides down ----- */
+.chat-header {
+  animation: fadeIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Message bubbles ----- */
+.message.self {
+  animation: slideIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: bottom right;
+}
+
+.message.other {
+  animation: slideInLeft 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: bottom left;
+}
+
+.message.system {
+  animation: fadeInFast 0.3s ease both;
+}
+
+/* ----- Dashboard glass panel fades in ----- */
+.glass-panel.dashboard-box {
+  animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.05s both;
+}
+
+/* ----- Staggered chat list items ----- */
+.chat-list-item {
+  animation: staggerIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: background 0.2s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+}
+
+.chat-list-item:hover {
+  transform: translateX(3px);
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: rgba(99, 102, 241, 0.08) !important;
+}
+
+/* Stagger each list item via nth-child */
+.chat-list-item:nth-child(1)  { animation-delay: 0.03s; }
+.chat-list-item:nth-child(2)  { animation-delay: 0.06s; }
+.chat-list-item:nth-child(3)  { animation-delay: 0.09s; }
+.chat-list-item:nth-child(4)  { animation-delay: 0.12s; }
+.chat-list-item:nth-child(5)  { animation-delay: 0.15s; }
+.chat-list-item:nth-child(6)  { animation-delay: 0.18s; }
+.chat-list-item:nth-child(7)  { animation-delay: 0.21s; }
+.chat-list-item:nth-child(8)  { animation-delay: 0.24s; }
+.chat-list-item:nth-child(n+9){ animation-delay: 0.27s; }
+
+/* ----- Sidebar panel ----- */
+.sidebar-overlay {
+  animation: fadeInFast 0.25s ease both;
+}
+
+.sidebar-content {
+  animation: slideInLeft 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Profile menu dropdown ----- */
+/* Applied via inline style in Dashboard — replicate here for any .profile-dropdown class */
+.profile-dropdown {
+  animation: dropdownOpen 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top right;
+}
+
+/* ----- Modals — popIn effect ----- */
+.modal-content,
+.glass-panel[style*="border-radius: 16px"] {
+  animation: popIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Buttons — micro-interactions ----- */
+.btn {
+  transition: background 0.2s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease, opacity 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+}
+
+/* ----- Input fields — focus glow ----- */
+.input-field {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.input-field:focus {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* ----- Notification toast ----- */
+.notification-toast {
+  animation: notificationEnter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Avatar / profile pic hover ----- */
+.avatar-ring {
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease;
+}
+
+.avatar-ring:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+/* ----- Online indicator pulse ----- */
+.online-dot {
+  animation: floatPulse 2.5s infinite;
+}
+
+/* ----- Scroll button fade ----- */
+.scroll-btn-enter {
+  animation: fadeIn 0.2s ease both;
+}
+
+/* ----- Accordion sections ----- */
+.accordion-body {
+  animation: accordionOpen 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Reply/Edit banner slides down ----- */
+.reply-bar {
+  animation: fadeIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Message action menu pop ----- */
+.msg-action-menu {
+  animation: popIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top right;
+}
+
+/* ----- File upload panel slides up ----- */
+.attachment-preview {
+  animation: fadeIn 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Glass panel hover lift ----- */
+.glass-panel {
+  transition: box-shadow 0.25s ease, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ----- Image gallery modal ----- */
+.gallery-modal {
+  animation: fadeInFast 0.25s ease both;
+}
+
+.gallery-modal-inner {
+  animation: popIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Profile view modal overlay ----- */
+.profile-view-overlay {
+  animation: fadeInFast 0.22s ease both;
+}
+
+.profile-view-card {
+  animation: popIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Delete / confirm modals ----- */
+.confirm-modal {
+  animation: popIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ----- Unread badge pulse ----- */
+.unread-badge {
+  animation: pulseBadge 2s infinite;
+}
+
+/* ----- Media tabs slide indicator ----- */
+.media-tab-indicator {
+  transition: left 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ============================================================
+   REDUCED MOTION — respect OS preference
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
