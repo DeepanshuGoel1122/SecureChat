@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
+import ThemeToggle from '../components/ThemeToggle';
 
 function AdminDashboard() {
   const { user, logout, onlineUsers, socket } = useContext(AuthContext);
@@ -484,9 +485,9 @@ function AdminDashboard() {
       <div style={{ 
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
         width: '100%', maxWidth: '900px', margin: '0 auto 1rem auto', 
-        borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.75rem 1rem',
+        borderBottom: '1px solid var(--admin-trans-08)', padding: '0.75rem 1rem',
         position: 'sticky', top: 0, 
-        background: 'rgba(13, 17, 23, 0.75)', 
+        background: 'var(--admin-header-bg)', 
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         zIndex: 20,
@@ -515,6 +516,7 @@ function AdminDashboard() {
           <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: '600', lineHeight: 1 }}>{user?.username}</div>
           </div>
+          <ThemeToggle />
           <button 
             className="btn btn-secondary" 
             style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', border: '1px solid rgba(255,0,0,0.5)', color: '#ff4d4d', background: 'rgba(255,0,0,0.1)', borderRadius: '6px', fontWeight: 'bold' }} 
@@ -541,8 +543,8 @@ function AdminDashboard() {
             onClick={() => { setActiveTab(stat.tab); if(stat.tab === 'pending') setDeleteConfirm(null); }}
             style={{ 
               flex: '1 1 auto', textAlign: 'center', padding: '0.4rem 0.2rem', cursor: 'pointer', borderRadius: '8px', 
-              border: activeTab === stat.tab ? `2px solid ${stat.color}` : '1px solid rgba(255,255,255,0.05)', 
-              background: activeTab === stat.tab ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.2)',
+              border: activeTab === stat.tab ? `2px solid ${stat.color}` : '1px solid var(--admin-trans-05)', 
+              background: activeTab === stat.tab ? 'var(--admin-trans-05)' : 'var(--admin-dark-20)',
               transition: 'all 0.2s', minWidth: '0',
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               boxShadow: activeTab === stat.tab ? `0 0 10px ${stat.color}44` : 'none',
@@ -565,8 +567,8 @@ function AdminDashboard() {
             
             {/* Filters Section */}
             <div style={{ 
-              background: 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', borderRadius: '12px', 
-              border: '1px solid rgba(255,255,255,0.06)', marginBottom: '0.25rem'
+              background: 'var(--admin-trans-03)', padding: '0.75rem 1rem', borderRadius: '12px', 
+              border: '1px solid var(--admin-trans-06)', marginBottom: '0.25rem'
             }}>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '0.6rem', display: 'flex', justifyContent: 'space-between' }}>
                 <span>Filter Active Users</span>
@@ -613,7 +615,7 @@ function AdminDashboard() {
               };
 
               return (
-                <div key={u._id} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.4)', padding: '0.75rem', borderRadius: '10px', borderLeft: u.role === 'admin' ? '4px solid #ff0000' : '4px solid #cc0000', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <div key={u._id} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'space-between', alignItems: 'center', background: 'var(--admin-dark-40)', padding: '0.75rem', borderRadius: '10px', borderLeft: u.role === 'admin' ? '4px solid #ff0000' : '4px solid #cc0000', border: '1px solid var(--admin-trans-05)' }}>
                   <div style={{ flex: 1, minWidth: '130px' }}>
                     <div style={{ fontWeight: '800', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'white' }}>
                       <span title={currentDevice.toUpperCase()} style={{ fontSize: '1.1rem' }}>{getDeviceIcon(currentDevice)}</span>
@@ -627,7 +629,7 @@ function AdminDashboard() {
                       </div>
 
                       {u.lastLoginMetadata?.os && (
-                        <div style={{ fontSize: '0.75rem', color: '#aaa', fontStyle: 'italic', background: 'rgba(255,255,255,0.03)', padding: '0.2rem 0.6rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.03)', marginTop: '0.2rem' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#aaa', fontStyle: 'italic', background: 'var(--admin-trans-03)', padding: '0.2rem 0.6rem', borderRadius: '4px', border: '1px solid var(--admin-trans-03)', marginTop: '0.2rem' }}>
                           <span style={{ color: '#ff4d4d', marginRight: '0.3rem' }}>DEVICE:</span>
                           {u.lastLoginMetadata.brand} {u.lastLoginMetadata.model !== 'Device' && u.lastLoginMetadata.model} 
                           <span style={{ opacity: 0.6, fontSize: '0.65rem' }}> — {u.lastLoginMetadata.os} ({u.lastLoginMetadata.browser})</span>
@@ -639,12 +641,12 @@ function AdminDashboard() {
                         {formatDate(u.createdAt)}
                       </div>
                       
-                      <div style={{ marginTop: '0.3rem', padding: '0.4rem', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
+                      <div style={{ marginTop: '0.3rem', padding: '0.4rem', background: 'var(--admin-trans-03)', borderRadius: '4px' }}>
                         <div style={{ color: 'var(--accent)', fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.2rem', textTransform: 'uppercase' }}>FRIENDS ({u.friends?.length || 0})</div>
                         <div style={{ fontSize: '0.75rem', opacity: 0.8, display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
                           {u.friends && u.friends.length > 0 ? (
                             u.friends.map((f, i) => (
-                              <span key={f._id} style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>
+                              <span key={f._id} style={{ background: 'var(--admin-trans-10)', padding: '2px 6px', borderRadius: '4px' }}>
                                 {f.username}
                               </span>
                             ))
@@ -659,8 +661,8 @@ function AdminDashboard() {
                       <div 
                         style={{ 
                           display: 'flex', alignItems: 'center', gap: '0.4rem',
-                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
-                          border: '1px solid rgba(255,255,255,0.06)',
+                          background: 'var(--admin-trans-03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid var(--admin-trans-06)',
                           opacity: !allowMessageDelete ? 0.35 : (togglingUserDeleteId === u._id ? 0.5 : 1),
                           transition: 'opacity 0.2s ease',
                           pointerEvents: !allowMessageDelete ? 'none' : 'auto',
@@ -674,7 +676,7 @@ function AdminDashboard() {
                           disabled={togglingUserDeleteId === u._id || !allowMessageDelete}
                           style={{
                             position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
-                            background: allowMessageDelete && u.canDeleteMessages !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            background: allowMessageDelete && u.canDeleteMessages !== false ? 'var(--success)' : 'var(--admin-trans-15)',
                             transition: 'background 0.3s ease', flexShrink: 0,
                             boxShadow: allowMessageDelete && u.canDeleteMessages !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
                           }}
@@ -694,8 +696,8 @@ function AdminDashboard() {
                       <div 
                         style={{ 
                           display: 'flex', alignItems: 'center', gap: '0.4rem',
-                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
-                          border: '1px solid rgba(255,255,255,0.06)',
+                          background: 'var(--admin-trans-03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid var(--admin-trans-06)',
                           opacity: !allowMediaSharing ? 0.35 : (togglingUserFileId === u._id ? 0.5 : 1),
                           transition: 'opacity 0.2s ease',
                           pointerEvents: !allowMediaSharing ? 'none' : 'auto',
@@ -715,7 +717,7 @@ function AdminDashboard() {
                           disabled={togglingUserFileId === u._id || !allowMediaSharing}
                           style={{
                             position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
-                            background: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            background: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? 'var(--success)' : 'var(--admin-trans-15)',
                             transition: 'background 0.3s ease', flexShrink: 0,
                             boxShadow: allowMediaSharing && (u.canMediaSharing ?? u.canRestrictedFileUpload ?? u.canUploadFiles) !== false ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
                           }}
@@ -734,8 +736,8 @@ function AdminDashboard() {
                       <div
                         style={{
                           display: 'flex', alignItems: 'center', gap: '0.4rem',
-                          background: 'rgba(255,255,255,0.03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
-                          border: '1px solid rgba(255,255,255,0.06)',
+                          background: 'var(--admin-trans-03)', padding: '0.3rem 0.6rem', borderRadius: '6px',
+                          border: '1px solid var(--admin-trans-06)',
                           opacity: (!allowMediaSharing || !allowUnrestrictedFileUpload) ? 0.35 : (togglingUserFileId === u._id ? 0.5 : 1),
                           transition: 'opacity 0.2s ease',
                           pointerEvents: (!allowMediaSharing || !allowUnrestrictedFileUpload) ? 'none' : 'auto',
@@ -749,7 +751,7 @@ function AdminDashboard() {
                           disabled={togglingUserFileId === u._id || !allowMediaSharing || !allowUnrestrictedFileUpload}
                           style={{
                             position: 'relative', width: '34px', height: '18px', borderRadius: '9px', border: 'none', cursor: 'pointer',
-                            background: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                            background: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? 'var(--success)' : 'var(--admin-trans-15)',
                             transition: 'background 0.3s ease', flexShrink: 0,
                             boxShadow: allowMediaSharing && allowUnrestrictedFileUpload && u.canUnrestrictedFileUpload === true ? '0 0 6px rgba(46,160,67,0.4)' : 'none'
                           }}
@@ -784,7 +786,7 @@ function AdminDashboard() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {disabledUsers.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>No disabled accounts.</p>}
             {disabledUsers.map(u => (
-              <div key={u._id} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '0.6rem 0.6rem', borderRadius: '8px', borderLeft: '3px solid #666', opacity: 0.8 }}>
+              <div key={u._id} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'space-between', alignItems: 'center', background: 'var(--admin-trans-03)', padding: '0.6rem 0.6rem', borderRadius: '8px', borderLeft: '3px solid #666', opacity: 0.8 }}>
                 <div style={{ flex: 1, minWidth: '130px' }}>
                   <div style={{ fontWeight: '800', fontSize: '1.05rem', color: '#999' }}>{u.username}</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.3rem' }}>
@@ -922,9 +924,9 @@ function AdminDashboard() {
                       <span style={{ fontSize: '0.75rem', color: '#888', opacity: 0.7 }}>{new Date(d.createdAt).toLocaleDateString()}</span>
                       <button 
                         title="Remove from blacklist"
-                        style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#ff5858', cursor: 'pointer', borderRadius: '50%', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', transition: 'background 0.2s' }}
+                        style={{ background: 'var(--admin-trans-10)', border: 'none', color: '#ff5858', cursor: 'pointer', borderRadius: '50%', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', transition: 'background 0.2s' }}
                         onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,0,0,0.2)'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'var(--admin-trans-10)'}
                         onClick={() => setBlacklistConfirm(d._id)}
                       >
                         &times;
@@ -947,8 +949,8 @@ function AdminDashboard() {
             {/* Allow Message Delete Toggle */}
             <div className="admin-setting-row" style={{ 
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
-              border: '1px solid rgba(255,255,255,0.05)' 
+              background: 'var(--admin-dark-40)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid var(--admin-trans-05)' 
             }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -982,7 +984,7 @@ function AdminDashboard() {
                 disabled={togglingDelete}
                 style={{
                   position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
-                  background: allowMessageDelete ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  background: allowMessageDelete ? 'var(--success)' : 'var(--admin-trans-15)',
                   flexShrink: 0, marginLeft: '1rem',
                   boxShadow: allowMessageDelete ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
                   opacity: togglingDelete ? 0.5 : 1
@@ -1002,8 +1004,8 @@ function AdminDashboard() {
             {/* Restricted File Upload Toggle */}
             <div className="admin-setting-row" style={{ 
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
-              border: '1px solid rgba(255,255,255,0.05)' 
+              background: 'var(--admin-dark-40)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid var(--admin-trans-05)' 
             }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1041,7 +1043,7 @@ function AdminDashboard() {
                 disabled={togglingFileUpload}
                 style={{
                   position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
-                  background: allowMediaSharing ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  background: allowMediaSharing ? 'var(--success)' : 'var(--admin-trans-15)',
                   flexShrink: 0, marginLeft: '1rem',
                   boxShadow: allowMediaSharing ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
                   opacity: togglingFileUpload ? 0.5 : 1
@@ -1059,8 +1061,8 @@ function AdminDashboard() {
             {/* Unrestricted File Upload Toggle */}
             <div className="admin-setting-row" style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px',
-              border: '1px solid rgba(255,255,255,0.05)'
+              background: 'var(--admin-dark-40)', padding: '1rem', borderRadius: '10px',
+              border: '1px solid var(--admin-trans-05)'
             }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1094,7 +1096,7 @@ function AdminDashboard() {
                 disabled={togglingFileUpload}
                 style={{
                   position: 'relative', width: '52px', height: '28px', borderRadius: '14px', border: 'none', cursor: 'pointer',
-                  background: allowUnrestrictedFileUpload ? 'var(--success)' : 'rgba(255,255,255,0.15)',
+                  background: allowUnrestrictedFileUpload ? 'var(--success)' : 'var(--admin-trans-15)',
                   flexShrink: 0, marginLeft: '1rem',
                   boxShadow: allowUnrestrictedFileUpload ? '0 0 12px rgba(46,160,67,0.4)' : 'none',
                   opacity: togglingFileUpload ? 0.5 : 1
@@ -1112,8 +1114,8 @@ function AdminDashboard() {
             {/* Max File Size Setting */}
             <div style={{ 
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
-              background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '10px', 
-              border: '1px solid rgba(255,255,255,0.05)' 
+              background: 'var(--admin-dark-40)', padding: '1rem', borderRadius: '10px', 
+              border: '1px solid var(--admin-trans-05)' 
             }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'white', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

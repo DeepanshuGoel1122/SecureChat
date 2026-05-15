@@ -17,6 +17,15 @@
   --file-msg-bg: linear-gradient(135deg, #3b82f6, #2dd4bf);
   --modal-backdrop: rgba(0, 0, 0, 0.7);
   --modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  --admin-trans-03: rgba(255,255,255,0.03);
+  --admin-trans-05: rgba(255,255,255,0.05);
+  --admin-trans-06: rgba(255,255,255,0.06);
+  --admin-trans-08: rgba(255,255,255,0.08);
+  --admin-trans-10: rgba(255,255,255,0.1);
+  --admin-trans-15: rgba(255,255,255,0.15);
+  --admin-dark-20: rgba(0,0,0,0.2);
+  --admin-dark-40: rgba(0,0,0,0.4);
+  --admin-header-bg: rgba(13, 17, 23, 0.75);
 }
 
 [data-theme='light'] {
@@ -38,6 +47,15 @@
   --file-msg-bg: linear-gradient(135deg, #2563eb, #0d9488);
   --modal-backdrop: rgba(0, 0, 0, 0.45);
   --modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+  --admin-trans-03: rgba(0,0,0,0.03);
+  --admin-trans-05: rgba(0,0,0,0.05);
+  --admin-trans-06: rgba(0,0,0,0.06);
+  --admin-trans-08: rgba(0,0,0,0.08);
+  --admin-trans-10: rgba(0,0,0,0.1);
+  --admin-trans-15: rgba(0,0,0,0.15);
+  --admin-dark-20: rgba(255,255,255,0.5);
+  --admin-dark-40: rgba(255,255,255,0.8);
+  --admin-header-bg: rgba(255, 255, 255, 0.85);
 }
 
 * {
